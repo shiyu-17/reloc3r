@@ -97,6 +97,24 @@ cd ../../../
 
 4. Optional: Download the checkpoints [Reloc3r-224](https://huggingface.co/siyan824/reloc3r-224)/[Reloc3r-512](https://huggingface.co/siyan824/reloc3r-512). The pre-trained model weights will automatically download when running the evaluation and demo code below. 
 
+### Runtime compatibility note
+
+Some PyTorch 2.5 + MKL 2025 environments fail to import with missing optional
+Intel VTune `iJIT_*` symbols. This repository includes a no-op compatibility
+shim for that profiler-only API; it does not change model inference. Build and
+enable it only when the import error occurs:
+
+```bash
+gcc -shared -fPIC -O2 -o tools/build/libijit_stub.so tools/ijit_stub.c
+export LD_PRELOAD="$PWD/tools/build/libijit_stub.so"
+```
+
+For the official 7Scenes layout, unpack the downloaded scene archives with:
+
+```bash
+bash tools/extract_7scenes.sh
+```
+
 
 ## Usage
 
@@ -201,4 +219,3 @@ If you find our work helpful in your research, please consider citing:
 ## Acknowledgments
 
 Thanks to these great repositories: [Croco](https://github.com/naver/croco), [DUSt3R](https://github.com/naver/dust3r), [Marepo](https://github.com/nianticlabs/marepo), and many other inspiring works in the community.
-

@@ -1,5 +1,7 @@
 data/
 checkpoints/
+outputs/
+_db-q_pair_info/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
