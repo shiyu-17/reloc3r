@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "status": "preregistered",
+  "question": "Does active evidence selection improve recovery under identical tools, verifier, and budget?",
+  "frozen": [
+    "reloc3r_backend",
+    "strong_geometry_backend",
+    "source_aware_verifier",
+    "f2_baseline",
+    "feedback_rule_baseline"
+  ],
+  "episode_triggers": [
+    "candidate_conflict",
+    "verifier_failure",
+    "reject_streak",
+    "stale_anchor",
+    "occlusion_recovery",
+    "corrupted_memory_injection"
+  ],
+  "actions": [
+    "alternative_reference",
+    "strong_geometry",
+    "heldout_verify",
+    "query_experience",
+    "finish"
+  ],
+  "baselines": [
+    "best_fixed_action",
+    "best_fixed_order",
+    "feedback_rule",
+    "geometry_greedy",
+    "finite_depth_oracle"
+  ],
+  "oracle_max_depth": 3,
+  "terminal_outcomes": [
+    "correct_accept",
+    "false_accept",
+    "budget_exhausted",
+    "right_censored"
+  ],
+  "causal_requirements": {
+    "query_gt_read": false,
+    "uses_future": false,
+    "selection_uses_gt": false,
+    "accepted_pose_only_memory_write": true,
+    "independent_verification_evidence": true
+  },
+  "primary_metrics": [
+    "episode_success",
+    "false_accept_rate",
+    "unrecovered_rate",
+    "time_to_first_correct",
+    "memory_pollution_rate",
+    "tool_calls",
+    "same_hardware_end_to_end_cost"
+  ],
+  "go_gate": {
+    "minimum_oracle_success_gain_pp": 5.0,
+    "or_minimum_cost_reduction_fraction_at_matched_success": 0.2,
+    "minimum_matched_episode_success_rate": 0.1,
+    "minimum_action_dependent_state_fraction": 0.1,
+    "target_action_dependent_state_fraction": 0.15,
+    "require_no_false_accept_regression": true,
+    "require_no_memory_pollution_regression": true,
+    "require_scene_disjoint_consistency": true,
+    "require_predictive_preaction_signal": true
+  },
+  "statistics_unit": "scene_and_episode",
+  "next_if_pass": "train_small_structured_sequential_policy",
+  "next_if_fail": "improve_action_pool_reference_grouping_or_independent_verification"
+}

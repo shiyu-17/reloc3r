@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "dataset": "7scenes",
+  "protocol": "official TrainSplit map / TestSplit query; global scene-disjoint learning split",
+  "splits": {"train": ["chess", "fire", "heads", "office"], "validation": ["pumpkin"], "test": ["redkitchen", "stairs"]},
+  "sequences": {
+    "chess": {"scene_id": "chess"}, "fire": {"scene_id": "fire"}, "heads": {"scene_id": "heads"},
+    "office": {"scene_id": "office"}, "pumpkin": {"scene_id": "pumpkin"},
+    "redkitchen": {"scene_id": "redkitchen"}, "stairs": {"scene_id": "stairs"}
+  }
+}

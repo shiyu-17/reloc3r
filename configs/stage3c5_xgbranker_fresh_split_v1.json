@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "name": "stage3c5_xgbranker_fresh_split_v1",
+  "purpose": "Diagnostic closed-loop test separating acquisition-ranker failure from structured-evidence observability/coverage limits.",
+  "training_coverage": {
+    "frames": [0, 59],
+    "description": "Frozen Stage 3C XGBoost models trained before this split."
+  },
+  "evaluation": {
+    "sequences": ["dynamics_0", "static_0", "lt_changes_0", "lt_changes_dynamics_0"],
+    "frames": [80, 99],
+    "max_acquisitions": 2,
+    "oracle_depth": 2,
+    "budget_ms": 30000,
+    "policy": "stage3c_xgb_ranker",
+    "baseline": "feedback_rule"
+  },
+  "controller_boundary": {
+    "acquisition": "XGBRanker raw ordering among Localize/Geometry/Memory",
+    "terminal": "separate calibrated P_recover - lambda*C controller plus frozen verifier",
+    "lambda_cost": 0.05,
+    "memory_terminal_rule": "Memory is context only and cannot be accepted directly."
+  },
+  "audit": {
+    "method": "fork exact live policy state; enumerate budget-matched two-step Oracle only after online action selection",
+    "primary": "Geometry opportunity recall",
+    "secondary": ["Geometry precision", "missed Geometry regret", "recovery-state success", "delta_P versus lambda_delta_C"]
+  },
+  "claim_boundary": "This is an unseen temporal split after policy selection, not a scene-disjoint final paper test."
+}

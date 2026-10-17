@@ -105,8 +105,8 @@ shim for that profiler-only API; it does not change model inference. Build and
 enable it only when the import error occurs:
 
 ```bash
-gcc -shared -fPIC -O2 -o tools/build/libijit_stub.so tools/ijit_stub.c
-export LD_PRELOAD="$PWD/tools/build/libijit_stub.so"
+gcc -shared -fPIC -O2 -o tools/build/libitt_compat_stub.so tools/itt_compat_stub.c
+export LD_PRELOAD="$PWD/tools/build/libitt_compat_stub.so"
 ```
 
 For the official 7Scenes layout, unpack the downloaded scene archives with:

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "dataset": "LILocBench",
+  "sequences": {
+    "static_0": {"scene_id": "lilocbench_site_0", "condition": "static"},
+    "dynamics_0": {"scene_id": "lilocbench_site_0", "condition": "dynamic"},
+    "lt_changes_0": {"scene_id": "lilocbench_site_0", "condition": "long_term_change"},
+    "lt_changes_dynamics_0": {"scene_id": "lilocbench_site_0", "condition": "dynamic_and_long_term_change"}
+  },
+  "note": "All four sequences share one physical site. They cannot form a scene-disjoint train/validation/test split."
+}

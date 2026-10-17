@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "stage3d_recovery_observability_v1",
+  "purpose": "Measure whether pre-Geometry evidence makes the marginal value of strong Geometry observable in policy-induced recovery states.",
+  "targeted_collection": {
+    "source": "outputs/lilocbench/stage3c_recovery_dataset_r1/recovery_cost_ranking.jsonl",
+    "output": "outputs/lilocbench/stage3d_recovery_opportunities_r1",
+    "boundary_margin": 0.15,
+    "negative_keep_probability": 0.25,
+    "training_only_weight_cap": 3.0,
+    "selected_states": 751,
+    "reason_counts": {
+      "geometry_positive_recovery": 87,
+      "geometry_boundary_recovery": 599,
+      "memory_negative_recovery": 6,
+      "recovery_background": 4,
+      "root_background": 55
+    }
+  },
+  "feature_ladder": {
+    "f0": "current structured retrieval/verifier/budget/anchor state",
+    "f1": "F0 plus cheap correspondence spatial coverage, entropy, concentration, and retrieval spread",
+    "f2": "F1 plus pre-action temporal/anchor consistency",
+    "f3": "F2 plus pre-action appearance/change and dynamic/occlusion cues",
+    "dimensions": {"f0": 20, "f1": 30, "f2": 36, "f3": 43},
+    "post_geometry_fields": "fail closed",
+    "extra_network_cost": "any segmentation/change network must be charged to the current action; the reference implementation uses ORB only"
+  },
+  "frozen_controller": {
+    "model": "XGBRanker",
+    "acquisition": "rank Localize/Geometry/Memory",
+    "terminal": "independent calibrated P_recover - 0.05*C_hat plus verifier",
+    "memory_terminal_rule": "Memory is context only; fresh evidence is required for Accept"
+  },
+  "evaluation": {
+    "training_frames": [0, 59],
+    "fresh_frames": [80, 99],
+    "sequences": ["dynamics_0", "static_0", "lt_changes_0", "lt_changes_dynamics_0"],
+    "primary": "Geometry opportunity recall",
+    "secondary": ["Geometry precision", "missed Geometry regret", "pairwise margin sign", "success-cost-FAR frontier"],
+    "claim_boundary": "fresh temporal diagnostic, not a scene-disjoint final test"
+  },
+  "next_required_run": "Enable --stage3d-preaction-features during online collection, retrain F1/F3, and repeat the audit on a new split; existing ladder numbers were trained with missing optional cues and do not claim an appearance benefit."
+}

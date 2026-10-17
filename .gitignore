@@ -3,6 +3,11 @@ checkpoints/
 outputs/
 _db-q_pair_info/
 
+# Locally cloned or installed third-party runtimes.  These are reproducible
+# dependencies, not source artifacts of this repository.
+third_party/DPVO/
+third_party/stage3c_xgboost/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

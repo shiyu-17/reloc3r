@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "name": "stage3b_pareto_gate_v1",
+  "success": {
+    "baseline": "feedback_rule",
+    "noninferiority_margin": 0.02,
+    "require_ci_noninferiority": false
+  },
+  "safety": {
+    "max_false_accept_rate": 0.10
+  },
+  "efficiency": {
+    "max_mean_tool_cost_s": 1.0,
+    "require_lower_cost_than_baseline": true
+  },
+  "coverage": {
+    "required_sequences": [
+      "dynamics_0",
+      "static_0",
+      "lt_changes_0",
+      "lt_changes_dynamics_0"
+    ],
+    "minimum_common_frames": 80
+  },
+  "statistics": {
+    "bootstrap_samples": 10000,
+    "confidence_level": 0.95,
+    "seed": 777
+  },
+  "interpretation": "A policy passes only when success is within two percentage points of feedback-rule, FAR is at most 10%, mean measured tool cost is below one second, cost is lower than feedback-rule, and frame coverage is complete. Confidence intervals are reported; CI noninferiority becomes mandatory only after a larger final-blind set is frozen."
+}

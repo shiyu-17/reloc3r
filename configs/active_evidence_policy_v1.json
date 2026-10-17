@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "calibration_sequences": [
+    "static_0",
+    "dynamics_0"
+  ],
+  "target_geometry_call_rate": 0.35,
+  "fixed_geometry": {
+    "schedule": "stable_sha256(sequence:frame_index) < target_geometry_call_rate"
+  },
+  "uncertainty_trigger": {
+    "verification_risk_threshold": 3.9784160886317963,
+    "selection": "top 35% first-candidate verifier risks on calibration sequences; policy-visible evidence only"
+  },
+  "one_shot_router": {
+    "retrieval_score_threshold": 0.34822,
+    "selection": "bottom 35% mean top-3 retrieval scores on calibration sequences; no outcomes or verifier feedback"
+  }
+}

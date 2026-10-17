@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "stage3c_recovery_policy_v1",
+  "purpose": "Separate recovery-probability and incremental-cost prediction with an explicit online controller.",
+  "supervision": {
+    "recovery_target": "finite-depth Oracle correct_accept after taking an acquisition action",
+    "cost_target": "Oracle leaf measured_tool_cost_s minus live state frame_tool_cost_s",
+    "ranking_target": "recovery_target - 0.05 * incremental_cost_s",
+    "online_boundary": "Targets use evaluator-only GT/Oracle outcomes; online policy receives only structured state and action descriptors."
+  },
+  "controller": {
+    "lambda_cost": 0.05,
+    "defer_threshold": 0.0,
+    "terminal_continue_margin": 0.05,
+    "terminal_evidence_sources": ["reloc3r_online", "roma_online_geometry"],
+    "memory_rule": "Memory is retrieval context and cannot be accepted directly; it requires fresh localizer or geometry evidence."
+  },
+  "training": {
+    "cost_loss_weight": 0.5,
+    "pairwise_rank_loss_weight": 1.0,
+    "validation": "per-sequence temporal tail; DAgger states remain training-only"
+  },
+  "evaluation": "Use the frozen Stage 3B Pareto Gate on complete four-sequence, causal-audited rollouts."
+}

@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "name": "stage3d_recovery_observability_v2",
+  "purpose": "Test whether legal evidence observed before a Geometry call predicts its incremental value in policy-induced recovery states.",
+  "observation_boundary": {
+    "allowed": ["cheap Reloc3r pose dispersion", "retrieval/reference-group statistics", "ORB correspondence spatial statistics", "pre-action pose-anchor consistency", "query-reference appearance/change proxies"],
+    "forbidden": ["RoMa matches", "PnP", "inlier count", "reprojection error", "epipolar residual", "triangulated geometry"],
+    "cost_accounting": "ORB evidence is measured as part of the cheap Localize action; no uncharged segmentation or change network is used."
+  },
+  "feature_ladder": {
+    "f0": "24D structured retrieval, cheap-candidate dispersion, verifier, temporal-state and budget evidence",
+    "f1": "34D F0 + actual cheap correspondence spatial coverage/entropy/concentration",
+    "f2": "40D F1 + pre-action candidate-to-anchor temporal consistency",
+    "f3": "47D F2 + query-reference appearance/change proxies",
+    "missing_optional_features": "represented as zeros plus an availability bit; only recovery states with a cheap localizer receipt expose these optional fields"
+  },
+  "training": {
+    "source": "natural Oracle data plus C3.6-policy-induced live-cost recovery trajectories",
+    "targeting": "oversample Geometry-positive, near-boundary and high-regret recovery states only in training; retain natural-prior calibration data",
+    "controller": "component utility model; P(correct accept), P(false accept), cost, recovery time and memory pollution are composed under the frozen utility contract"
+  },
+  "evaluation": {
+    "fresh_frames": [100, 119],
+    "primary": ["conditional Geometry ranking recall", "end-to-end Geometry opportunity recall"],
+    "secondary": ["Geometry precision", "Geometry regret", "recovery-state success", "success-cost-FAR frontier"],
+    "selection": "all feature levels use the identical collection and controller protocol; comparison uses a previously unseen temporal split"
+  }
+}

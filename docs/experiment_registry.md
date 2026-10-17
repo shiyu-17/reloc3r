@@ -32,14 +32,29 @@
 | AVL-011 | Dynamic+LT 诊断与强化 deterministic recovery | `completed with limits` | test success=`91.24%`、coverage=`100%`、geometry call=`67.13%`；共同失败主要是 reference/一致性/错误接受 | `outputs/lilocbench/AVL-011/final_v1/evaluation.json` |
 | AVL-012 | Localization Reliability & Reject | `revalidated with limits` | selective geometry 重校准后阈值=`1.5`；test coverage=`55.41%`、selective accuracy=`95.56%`、错误接受率=`4.44%` | `outputs/lilocbench/AVL-014/AVL-012_selective/evaluation.json` |
 | AVL-013 | Closed-loop Reject & Recovery | `revalidated with limits` | v3 test coverage=`54.23%`、success=`51.57%`、accepted accuracy=`95.10%`、最长 Reject=`26`；117/119 Reject 段恢复，2 个右删失 | `outputs/lilocbench/AVL-014/AVL-013_v3/evaluation.json` |
+| AVL-015 | Reliability–Recovery Frontier | `completed with limits` | Q1/Q2/Q3 已完成：动作存在理论互补与固定动作 Pareto 空间；source-specific verifier 仅提供有限校准证据；Historical Keyframe Relocalization 未形成稳定独立恢复能力；Agent 仍 Hold/No-Go | `outputs/lilocbench/AVL-015/{pose_oracle,source_verification,dynamic_retrust,historical_keyframe_memory}/` |
 | AVL-014 | AVL-010/011/012/013 implementation revalidation | `completed with limits` | 修正 Sim(3)、selective geometry、recovery aggregation、state trace，并完成 jump-guard 配对消融；Agent 继续 No-Go | `outputs/lilocbench/AVL-014/` |
+| Stage 3B--G | 真实 GPU 闭环、稳定性、成对分歧与 terminal alignment | `completed / closed` | 220 帧中只有5个最终分歧；legacy rule 相对 F2 的正确帧差在 terminal alignment 后由 `+3` 变为 `-1`。冻结 F2/rule/verifier/backends，停止同 split controller/Geometry 调参 | `outputs/lilocbench/stage3f_terminal_aligned_feedback_r1/stage3_closeout.json` |
+
+> 2026-10-12 方法决策更新：项目由“立即实现完整 Agent 的 No-Go”调整为“允许受控 Agent 原型研究，论文收益仍未证明”。Agent 被重新定义为多轮主动取证策略，不是固定 pose 输出池上的一次性 estimator router。完整路线见 `docs/visual_localization_agent_roadmap.md`。
+
+> 2026-10-14 Stage 4A 实现启动：已完成 failure-triggered episode miner、scene-id
+> split 审计、episode-sharded sequential runner 和可实现价值 Gate evaluator。Stage 3G
+> 100--154帧 trace 共生成28个 recovery episode，但 LILocBench 四条序列共用一个
+> 物理场景，故 manifest 标记 `scene_disjoint_ready=false / audit_only`。CPU 和真实
+> Reloc3r/RoMa 两帧 depth-2 smoke 已通过，不构成 Gate 结论。产物位于
+> `outputs/lilocbench/active_evidence_value_v1/`。
 
 ### 当前统一判定
 
 - 所有在线策略均禁止读取 query GT、未来帧或事后 GT reference；GT 只出现在独立 evaluator、审计和离线标签中。
 - AVL-005-B 的成本结论以统一 stage accounting 为准；Reloc3r 项为每序列 8 帧样本缩放估计，不能写成逐帧实测。
 - AVL-004 的 HLoc 结果只能称 **HLoc-style**，尚无审计过的标准 COLMAP-HLoc 3D map。
-- AVL-007 已完成但不触发 Agent Go。当前总决策为 **Hold / No-Go for immediate Agent implementation**；主线保持不变。
+- AVL-007 至 AVL-015 的历史结果不支持直接宣称 Agent 收益。2026-10-12 起总决策调整为 **Go for controlled Agent prototype / No-Go for paper-level Agent claim**：允许建设交互环境和最小训练原型，但必须在同工具、同 verifier、同预算下超过规则与轻量策略后，才能提升论文 claim。
+- 2026-10-14 Stage 3G 已完成成对分歧和 terminal-aligned 复验。learned policy
+  没有在成功率上稳定超过 feedback-rule，而 rule 旧有的微弱优势主要受自动
+  Accept 接口影响。F2 仅保留为 safety--cost Pareto baseline，Stage 3 正式收口；
+  后续只进行 failure-triggered、scene-disjoint 的主动取证可实现价值验证。
 - 后续所有新实验必须在本登记册追加新编号或明确的补充批次，不能覆盖以上协议、失败尝试或无效结论。
 
 ---
@@ -450,3 +465,323 @@
 - **统一判定**：AVL-010 修正后的时序结论可引用为“当前 DPVO/anchor 实现没有独立定位收益”；AVL-012/013 仍是 coverage–error calibration bottleneck；AVL-011 的强几何路线需保留宽松 guard 与严格 guard 两个版本。Agent 继续 No-Go。
 - **成本决策**：完整 Reloc3r/RoMa online timing 暂缓。当前 deterministic route 的 Sim(3)、selective evidence 和 jump-guard 刚完成修正，尚未形成稳定的最终策略；现在测量会把成本绑定到仍在变化的路线。待下一版 recovery policy 冻结后再做统一串行成本测量。
 - **状态**：`completed with limits`。
+
+## AVL-015 — Reliability–Recovery Frontier（运行前登记，2026-10-10）
+
+- **状态 / 范围**：`completed with limits`。全程保持 Agent Hold，未训练或运行 LLM/VLM Agent。本实验固定底层环境为 **Map Localization + Experience Memory + Geometry + Reliability**，回答了动作互补、可靠性判断和历史关键帧恢复三个问题，但 dynamic re-trust 仍是 evidence replay、Historical Memory 当前为负结果。
+- **Q1：动作互补空间**：只把最终产生 pose 的分支计为 pose action：`Reloc3r consensus`、`Historical-keyframe relocalization`、`rerank + Reloc3r`、`rerank + RoMa`，必要时加入 `HLoc-style pose`。`rerank` 单独是中间工具动作，`Reject` 是 abstention，二者不定义“定位成功集合”。
+- **Pose Oracle**：在独立 evaluator 中用 query GT 计算 `exists a: P_a correct`，报告每个 pose action 的独立成功率、两两互补矩阵、only-action 集合和 union 上界。GT 结果只用于离线 oracle/evaluator，不进入在线候选、验证或决策。
+- **Cost-aware Oracle**：在统一串行成本边界下，求达到指定 full-frame success 时的理论最低工具成本，并绘制 `Full Success – Geometry Calls – End-to-end Cost` Pareto frontier。重点比较最佳固定策略与 oracle 是否存在“更高成功率”或“相同成功率、更低成本”的有意义改进；不预设必须提高 3–5 pp。
+- **Q2：source-specific verification**：Consensus 分支使用 candidate dispersion、reference agreement、retrieval similarity；Historical Memory 使用 keyframe similarity、relative-pose geometry、keyframe reliability 与 age；RoMa/HLoc-style 使用 multi-reference agreement、inlier/reprojection 与 cross-tool agreement。不同来源分别校准，禁止复用一个无来源区分的统一 reliability score。
+- **Dynamic re-trust**：旧状态约束随最近可靠 anchor 的 age、reject streak 和 motion uncertainty 动态衰减。刚获得可靠定位时使用强 consistency constraint；长期 Lost 后 stale pose 不得否决具有高质量独立证据的 fresh global localization。固定 `2.5m/60°` jump guard 仅保留为 AVL-014 对照，不作为本实验默认规则。
+- **Frontier 指标**：不预设单一 `coverage>=80%` 门槛。完整报告 `Coverage – Selective Accuracy – Full-frame Success – False Acceptance – Recovery Time – Cost` frontier；Reject 帧在 full-frame success 中按失败计，并单独报告 abstention/右删失。
+- **Q3：Historical Keyframe Relocalization**：Memory 从历史 pose fallback 升级为经过验证的临时地图节点。只写入可靠历史 keyframe 的 `RGB + descriptor + global pose + reliability + timestamp/age`；当前定位失败时检索历史关键帧，估计当前图像到历史帧的相对位姿，并按 `T^w_t = T^w_k T^k_t` 组合为当前 global pose，之后接受独立 source-specific verification。禁止直接复制历史 pose。
+- **因果与泄漏审计**：在线模块只能访问当前帧、过去帧、mapping assets 和过去已验证状态；禁止 query GT、未来帧和事后标签。所有 trace 保存 `query_gt_read=false`、`uses_future=false`、`selection_uses_gt=false`。GT 仅由分离 evaluator 计算 pose 正确性、oracle 和 frontier。
+- **数据与冻结协议**：第一阶段复用 LILocBench mapping-only database、原四条 query 顺序和既有 40% validation / 60% same-scene temporal test；所有阈值、模型和 action cost 在 validation 冻结。该 test 仍不称独立泛化证据；进入最终 Agent 主张前必须补充未参与探索的新场景或跨数据集 held-out。
+- **Agent Go 判定**：只有当冻结 test 上 Cost-aware Action Oracle 相比最佳固定策略存在有意义的 Pareto 改进、存在可观测的 action-dependent context、source-specific verifier 能控制错误接受/状态污染，且后续任务特定 Agent 在相同输入/动作/预算下超过规则与轻量 router，才进入 Agent。若 Always-RoMa 持续支配，或新增 Historical Memory 不形成稳定 only-action 集合，则保持 Agent No-Go。
+- **计划产物**：`outputs/lilocbench/AVL-015/` 下分别保存 `pose_oracle/`、`cost_oracle/`、`source_verification/`、`historical_keyframe_memory/`、`frontier/`、`audit/` 和最终 `summary.json`。实验运行前不得用 test GT 调整协议；失败、无效与实现修正全部追加保留。
+
+### AVL-015 Q2/Q3 实现补充协议（2026-10-10，运行前登记）
+
+- **Q2 source-specific verifier**：从已有 causal AVL-012/013 evidence-only trace 中按 `consensus`、`memory`、`geometry` 分源计算风险，不使用 query GT/未来帧。阈值网格仍为 `{0.25,0.5,0.75,1,1.25,1.5,2,3}`；本次探索性校准对每个来源在 validation 选择 selective accuracy 最大且 coverage≥0.20 的阈值，test 冻结。该 20% 是分源校准的最低可观测覆盖约束，不是最终系统 coverage 目标。anchor age、reject streak 和 motion uncertainty 在本批 evidence 中尚未完整记录，dynamic re-trust 只作为下一版状态扩展，不能把本结果称为完整 verifier 闭环。
+- **Q3 Historical-keyframe Relocalization**：在线回放使用 AVL-013 v3 中 `accepted=true && state_updated=true` 的过去 query 帧作为 keyframe，只保存其 RGB path、DINO descriptor、global pose、reliability/trace 状态和 age；当前帧从过去 keyframe 中按当前 DINO descriptor 取候选，要求 keyframe index 小于当前 index，默认 `num_refs=4`、`min_gap=5`。RoMa 仅在当前帧与历史 keyframe 之间匹配；历史 keyframe 对三角化 3D tracks，PnP 估计 `T^w_t=T^w_kT^k_t`，输出独立 evidence（inliers、reprojection、pair support），不直接复制历史 pose。没有至少两帧历史 keyframe 时输出 unavailable。该模块先产生 candidate，最终接受必须由后续 source-specific verifier 决定。
+- **Q3 causal audit**：每帧保存 `max_historical_index < query_index`、`query_gt_read=false`、`uses_future=false`、`selection_uses_gt=false`；DINO embedding 只作为当前图像与已产生历史 descriptor 的检索表示。GT 只能由分离 evaluator 读取，用于报告 Memory-only/Map-or-RoMa-only/共同失败及 Accuracy–Coverage–Cost。
+
+### AVL-015 Q1 结果（2026-10-11 重算，completed with limits）
+
+- **输入与审计**：复用 AVL-004 `action_oracle/summary_always.json` 的 frozen pose outcomes，并加入 Q3 独立 causal Historical-keyframe trace；未驱动任何在线路由。`consensus`、`memory`、`HLoc-style`、`rerank+RoMa`、`Historical-keyframe` 均作为最终产生 pose 的 action，`rerank` 单独不计 action，Reject 不计成功。成本使用 AVL-005/006 已登记 timing boundary，Historical 使用其 trace 的实测 elapsed；GT 只由本 evaluator 读取，不能作为在线 action 输入。
+- **全 1696 帧独立成功率**：`consensus=1198/1696=70.64%`、`memory=1301/1696=76.71%`、`HLoc-style=1503/1696=88.62%`、`rerank+RoMa=1547/1696=91.21%`、`Historical=698/1696=41.16%`；五者 Pose Oracle union=`1628/1696=95.99%`。冻结 temporal test 对应为 `72.15/76.87/88.98/92.22/44.78%`，union=`985/1016=96.95%`。Historical 相对全部其他动作只贡献 `4` 个全量、`2` 个 test 独占成功帧，未形成稳定独立恢复能力。
+- **两两互补**：Memory/RoMa 为 `both=1245`、`memory-only=56`、`RoMa-only=302`、`neither=93`；HLoc/RoMa 为 `both=1466`、`HLoc-only=37`、`RoMa-only=81`、`neither=112`。原四动作严格 only-action 计数为 `consensus=4`、`memory=4`、`HLoc=17`、`RoMa=37`；加入 Historical 后其相对全部其他动作的 only-action 仅 `4`（test=`2`）。这证明原工具之间有动作互补，但 Historical 没有带来稳定新增集合，且精确计数仍受 seed/route 实现限制。
+- **冻结 temporal test（1016 帧）**：`consensus=72.15%`、`memory=76.87%`、`HLoc=88.98%`、`RoMa=92.22%`、`Historical=44.78%`、Pose Oracle=`985/1016=96.95%`。Validation 为 `68.38/76.47/88.09/89.71/35.74%`（同顺序）。该 split 是 same-scene calibration-shift test，不是独立泛化证据。
+- **Cost-aware oracle（GT 后验下界，成本边界修正后重算）**：只对 pose-producing action 计费，shared retrieval 只计一次；Reloc3r 为 AVL-006 估计，Memory 加 AVL-005 memory proxy，HLoc 包含其 rerank+geometry，RoMa 包含 top-100 query extraction+rerank+RoMa，Historical 使用 Q3 trace 的实测 cost。全量固定动作成本为 Consensus=`3311.0s`、Memory=`3397.3s`、HLoc=`2492.5s`、RoMa=`6622.6s`、Historical=`3714.7s`。理论 oracle 在达到 RoMa action pool 的 `91.21%` 成功率时最低约 `2461.5s`，达到五动作 union `95.99%` 时约 `2599.0s`；这是知道每帧 GT outcome 的不可部署下界，不能写成在线加速。
+- **Accuracy–Geometry Calls–Latency frontier**：固定动作点已写入 `summary.json`；全量非支配点为 Memory=`76.71%/0/3397.3s`、HLoc=`88.62%/1696/2492.5s`、RoMa=`91.21%/1696/6622.6s`（格式为 success/geometry calls/latency）。Historical=`41.16%/1696/3714.7s` 被 HLoc 严格支配；Consensus 被 Memory 支配。该 frontier 是固定动作比较，不是可部署 Manager frontier。
+- **Q1 结论**：原始 action pool 有理论互补和 cost Pareto 空间，但新增 Historical action 的独占集合极小，不能作为 Memory 新能力或 Agent Go 证据。继续保留 Q2/Q3 结果用于界定 failure-aware deterministic system；不进入 LLM Agent。
+- **产物**：`tools/run_avl015_pose_oracle.py`；`outputs/lilocbench/AVL-015/pose_oracle/summary.json`。该脚本是 evaluator-only，输出中的 oracle、互补和 cost curve 均标记为 post-hoc upper bound。
+
+### AVL-015 Q2 结果（2026-10-10，completed with limits）
+
+- **分源校准结果**：在已有 AVL-012/013 causal trace 中，按来源分别冻结 validation 阈值后，test 的 source-conditional 结果为：Consensus threshold=`0.75`，coverage=`84.97%`、selective accuracy=`94.56%`、false acceptance=`5.44%`；Memory threshold=`1.0`，coverage=`50.58%`、selective accuracy=`93.10%`、false acceptance=`6.90%`；Geometry threshold=`0.5`，coverage=`34.58%`、selective accuracy=`99.14%`、false acceptance=`0.86%`。
+- **解释边界**：这些 coverage 是“已被旧 causal route 选择到该来源的帧”中的 coverage，不是全帧 coverage；geometry 的高准确率以大量拒绝为代价。anchor age、reject streak 和 motion uncertainty 尚未进入 score，因此不能称为 dynamic re-trust 完成，也不能替代最终 online verifier。
+- **结论**：不同 pose 来源确实需要不同 reliability score；统一 risk score 不是唯一合理设计。但 Q2 目前只证明 calibration signal，尚未解决 Dynamic/Dynamic+LT 的高 coverage recovery bottleneck。
+- **产物**：`tools/eval_avl015_source_verifiers.py`；`outputs/lilocbench/AVL-015/source_verification/summary.json`。该结果保留为 `completed with limits`。
+
+### AVL-015 Q2 dynamic re-trust 首轮结果（2026-10-10，completed with limits）
+
+> 以下为当时的原始实验记录；其中“previous-state disagreement 已按 trust 衰减”的实现解释已被 2026-10-12 复核推翻。数值仅代表该冻结实现的回放结果。
+
+- **实现**：在 AVL-013 v3 的已有 causal candidate trace 上回放 source-specific threshold；当 `reject_streak>=3` 时移除 stale temporal/previous-state veto，但保留当前 intrinsic geometry 与 cross-source evidence。该脚本不重新生成 route 或 pose，GT 只在独立 evaluator 中用于评分。
+- **结果**：对全部 1696 个 evidence frame 进行 replay，并以新 replay 的 `reject_streak`、最近 accepted anchor 的 `anchor_age` 和 evidence 中的 `temporal_risk` 计算 `state_trust=exp(-anchor_age/20-reject_streak/3)`；旧状态与 geometry 的 previous-pose disagreement 按 trust 衰减。全量 coverage=`46.29%`、accepted accuracy=`97.07%`、full-frame success=`44.93%`；test coverage=`45.87%`、accepted accuracy=`96.57%`、full-frame success=`44.29%`，false acceptance=`3.43%`，平均恢复=`3.92` 帧，最长 Reject=`33`，test stale frames=`326`、accepted stale=`69`。trace 审计为 `query_gt_read=false`、`uses_future=false`、`selection_uses_gt=false`。
+- **限制与结论（已降级）**：这是全帧 evidence replay，不重新生成 Reloc3r/geometry pose 或在线 route；其 coverage/success 只能描述冻结实现，不能据此判断 dynamic re-trust 是否改善全帧表现。下一步必须先拆分风险项，再重新生成端到端 causal route。
+- **产物**：`tools/eval_avl015_dynamic_retrust.py`；`outputs/lilocbench/AVL-015/dynamic_retrust/evaluation.json`。
+
+### AVL-015 dynamic re-trust 实现复核（2026-10-12，结论降级）
+
+- **发现**：上游 `tools/run_avl012_reliability.py` 的 `geometry_risk` 已包含 `geometry_vs_previous_m/deg`；下游 `tools/eval_avl015_dynamic_retrust.py` 在保留未衰减 `geometry_risk` 的同时，又对重复的 previous-disagreement 项乘 `state_trust`。未衰减的复合项覆盖了预期衰减。
+- **只读验证**：对现有 `1108` 条 geometry-source evidence，将 `(anchor_age,reject_streak)` 从 `(0,0)` 改为极大值，最终 `relaxed_score` 改变数为 `0/1108`；且 `1108/1108` 条的 `geometry_risk` 均已不小于单独 previous-disagreement 风险。
+- **判定**：原 replay 的 coverage/accuracy 数字仍描述该实现的冻结回放，但“旧状态 disagreement 已按 trust 衰减”这一实现表述不成立；不得用该结果否定 dynamic re-trust。后续需保存不可约风险项，只衰减 state-dependent evidence，并重新生成完整 causal route。
+- **状态**：AVL-015 Q2 dynamic re-trust 从有限负证据进一步降级为 **implementation-limited / must revalidate**。
+
+## 2026-10-12 Agent 主线与实现决策
+
+### Phase A 实现落点（2026-10-12，代码 smoke-tested）
+
+- `tools/agentic_localization_env.py`：提供同帧多步 evidence acquisition、`reset/step`、验证后状态推进和严格 Memory 写入门控。
+- `tools/lilocbench_agent_backend.py`：reference action 触发当前 query 与所选 mapping references 的真实 Reloc3r pair inference；返回 `executed=true/cache_hit=false` 回执，未加载 query GT。
+- `tools/run_agentic_localization_env.py`：第一版主动 reference batch baseline，用于比较 fixed/reference-policy，而不是 Agent 论文 claim。
+- `tools/cpu_orb_agent_backend.py`：无 GPU 时的真实图像 smoke backend；每次 reference action 重新执行 ORB matching、triangulation、PnP 和 verifier，仅用于环境验收，不作为论文 baseline。
+- `tools/run_agentic_reference_switch_smoke.py`：固定一帧连续选择两组不同 reference，确认新候选覆盖旧 verification；产物位于 `outputs/lilocbench/AVL-agent-cpu-smoke/reference_switch_static_0/`。
+- `tools/test_agentic_localization_env.py`：验证不同 reference 确实进入 backend、execution receipt 的 query/reference IDs 必须匹配、未验证候选不能写入 Memory、cache-hit 回执被拒绝、evaluator 字段不能越过在线边界、state trust 随 anchor age/reject streak 衰减、future memory 被拒绝、新 reference 会清除旧 verification，并检查 `audit_trace()`；当前 9/9 通过。
+- `tools/run_avl012_reliability.py`：新增 intrinsic / cross-source / previous-state 风险分解；已在 `outputs/lilocbench/AVL-012_componentized/` 重跑，dynamic re-trust 的 fresh/stale score 在 `303/1108` 条 geometry-source evidence 上发生变化。
+
+该实现仍有两个未完成的部署级验证：在 LILocBench GPU 数据上运行全序列并核对实际 matching/pose elapsed；将 componentized risk 接入真实 route regeneration。未完成前不把 Phase A 写成 Agent 收益。
+
+在线 Reloc3r backend 在 CUDA 不可用时显式报错，不允许静默回退到 AVL-002/015 的冻结候选；当前机器的 `torch.cuda.is_available()` 为 `False`，因此真实 Reloc3r neural smoke run 仍未执行。CPU ORB backend 已在 `static_0` 前 3 帧真实图像上完成 9-transition smoke，`environment_audit.passed=true`；同一帧两组不同 reference 的重算也已通过。
+
+- **Agent 定义**：`Observation/State -> choose missing evidence -> tool call -> new observation -> update belief -> continue/Accept/Reject/Defer`。研究对象是连续定位状态和证据获取，不是一次选择 Reloc3r/Memory/RoMa。
+- **实现问题 1（固定候选池）**：AVL-015 Oracle 只覆盖既有 pose 输出；它不能约束通过替代 reference 或 held-out verification 生成的新候选。后续 action 必须改变 evidence set。
+- **实现问题 2（冻结回放）**：Historical Memory 读取旧 route 的 accepted trace，dynamic re-trust 不重新生成 pose/route；策略改变不会因果地改变后续 Memory 和 observation。训练前必须建立 `reset/step` 环境。
+- **实现问题 3（re-trust）**：旧实现的状态信任衰减被复合 geometry risk 覆盖；风险项现已拆分并通过 `303/1108` fresh/stale score change 复核，仍需真实交互 route 重验。
+- **基本系统**：MapIndex/ReferenceGroups、PoseTools、EvidenceStore、source-aware pose-conditioned Verifier、ExperienceMemory、CausalStateMachine、CostLedger 与可替换 Policy。
+- **第一项主动取证实验**：固定 Reloc3r/RoMa/verifier，只开放“选择下一组 reference 或 held-out verification evidence”，在相同 matching/tool budget 下比较 fixed/random/geometry-greedy/有限深度 oracle；在它证明新证据价值后再生成 Agentic trajectory。
+- **训练路线**：多场景动作展开与 cost-aware expert search -> 结构化 Agentic SFT -> policy-induced state 数据聚合 -> 必要时 RL。现有缓存只作初始状态/部分反事实，不能直接视为完整交互轨迹。
+- **IROS 证据**：需加入 standard HLoc 或等价强基线、scene-disjoint/cross-dataset 长期变化测试、实机 lost-and-recovery、统一延迟/成本、false acceptance、Memory pollution、右删失恢复统计及关键消融。
+- **主张边界**：可以开始受控 Agent prototype；只有 learned policy 在相同工具/verifier/budget 下超过 fixed-order、one-shot router、geometry-greedy 和轻量 sequential policy，才主张 Agent/VLM 独立收益。
+
+### AVL-015 Q3 结果（2026-10-11，completed with negative result）
+
+- **实现与因果审计**：四类序列共 1696 帧，Historical-keyframe route 只从当前帧之前 `accepted=true && state_updated=true` 的历史帧建立临时地图；当前图像与历史图像做 RoMa 匹配，历史全局 pose 三角化 3D tracks，再用 PnP 组合 `T_t^w=T_k^wT_t^k`。trace 均满足 `query_gt_read=false`、`uses_future=false`、`selection_uses_gt=false`、`historical_future_access=false`。
+- **原始候选结果**：全量 pose availability=`1685/1696=99.35%`、success=`698/1696=41.16%`；test availability=`100%`、success=`455/1016=44.78%`。按序列 test success 为 static=`45.09%`、dynamic=`24.73%`、LT=`54.15%`、dynamic+LT=`42.90%`；实测总 elapsed=`3676.76s`（另加 shared retrieval 后 Q1 成本为 `3714.71s`）。
+- **互补性**：相对 Consensus/Memory/HLoc/RoMa 的 raw Historical-only 为 all=`4`、test=`2`；test 中 `Historical ∩ RoMa` 为 `442`、RoMa-only=`495`、Historical-only=`13`，说明 pairwise difference 不等于相对整个 action pool 的独立恢复。
+- **Memory 专属 verifier**：validation 冻结全局 threshold=`1.0`，使用历史相似度、reprojection、inliers、pair support、历史 keyframe risk 与 age；test coverage=`21.85%`、selective accuracy=`63.96%`、false acceptance=`36.04%`、full-frame success=`13.98%`，且 Historical-only test=`0`。因此 verifier 不能把当前候选变成可靠恢复。
+- **结论**：本 Q3 实现没有证明 Experience Memory 产生稳定的新定位能力；当前更像高成本、低可靠的历史候选生成器。该负结果不否定未来更好的历史关键帧选择或局部地图构建，但不支持现在引入 Agent。实现/结果：`tools/run_avl015_historical_memory.py`、`tools/eval_avl015_historical_memory.py`、`tools/eval_avl015_historical_verifier.py`、`outputs/lilocbench/AVL-015/historical_keyframe_memory/`。
+
+### AVL-016 — Active Evidence Pilot（2026-10-12，completed with negative/limited result）
+
+- **目的**：在同一 causal environment、同一 evidence budget 和同一 verifier 下，先验证“策略主动选择下一组 reference”是否相对于固定顺序产生独立收益；该实验是进入 Agentic SFT 前的门槛，不预设 VLM 有效。
+- **协议**：四个序列的 calibration-prefix 只用于 light policy 的离线标签；严格复验测试使用后续 304 帧。每帧最多两组 reference，每组最多 3 个 references；fixed、random、rule、light 共用 historical-memory action、held-out verification、Accept/Reject/Defer 和 action budget。reference、verification、memory 三类工具调用均计入总 budget。oracle 使用测试 GT，仅作为 finite-depth counterfactual upper bound。
+- **连续帧 Memory 边界**：测试段内 accepted pose、历史关键帧和 reject state 会因果传给下一帧；历史 action 从历史帧 RGB、map references 建立局部 3D，再对当前帧重新 PnP，不复制旧 pose。为避免 calibration/test 泄漏，测试段从空 online Memory 冷启动。因此本条目不是 warm-start Memory ablation，也不是 learned memory agent；后续须同时报告 cold-start 与合法历史状态 warm-start。
+- **独立验证边界**：`verify_candidate` 从候选未使用的 retrieval references 中重新匹配，并按候选 pose 计算极线一致性；不复用候选自身的 inlier/reprojection 作为唯一验证证据。
+- **结果**：fixed=`81/304=26.6%` full-frame success、`81/87=93.1%` accepted accuracy；random=`69/304=22.7%`、`69/74=93.2%`；rule=`77/304=25.3%`、`77/83=92.8%`；light=`81/304=26.6%`、`81/87=93.1%`。平均总工具调用为 fixed/random/rule/light=`3.168/3.336/3.211/3.158`；light 与 fixed 并列，仅略低成本。历史 fixed RoMa cache 使用不同工具与 cost boundary，不能作为同成本 baseline。
+- **审计**：四个在线 policy 的 `query_gt_read=false`、`uses_future=false`、`selection_uses_gt=false`，environment audit 全部通过。light 的 `gt_used_for_labels=true` 仅表示 calibration-prefix 离线训练，`online_selection_uses_gt=false`；oracle 的 GT 使用显式标注为不可部署。
+- **判定**：当前 CPU-ORB action pool、强几何候选和 held-out verifier 尚未形成可观测 action-dependent context，主动策略没有超过 fixed；light 与 fixed 完全并列。该负结果不能外推为主动定位无效，但足以维持 Agent/VLM No-Go；先完成真实 GPU Reloc3r/RoMa、统一 online cost 和 scene-disjoint 复验，再决定是否生成 tool-expanded trajectories。
+- **硬件边界**：本机 `torch.cuda.is_available()=false`、device count=`0`，`nvidia-smi` 无法连接 NVIDIA driver；在线 Reloc3r backend 显式失败，未使用历史 cache 冒充强几何在线调用。因此 AVL-016 的负结果限定为 CPU action pool，不能外推为 GPU Reloc3r/RoMa 的最终结论。
+- **产物**：`tools/eval_active_evidence_policies.py`、`outputs/lilocbench/active_evidence_pilot128_heldout_v2/summary.json`、`docs/active_evidence_pilot_report.md`。
+
+### Stage 3B Pareto Gate v1（2026-10-12，development gate implemented）
+
+- **冻结目标**：success 相对 feedback-rule 非劣界 `-2 pp`；FAR `<=10%`；mean measured tool cost `<1.0 s/frame` 且低于 feedback-rule。三项必须同时通过，并要求四序列至少 80 个逐帧配对样本。
+- **provenance 门槛**：每个 trace 必须有对应 completed summary 且 causal audit passed；旧 `lt_changes_dynamics_0` feedback trace 因原进程退出码为 1、summary 缺少该 policy audit，被 Gate 正确排除。随后在预热 cache 上重跑四序列 feedback-rule，80 帧全部完成并审计通过。
+- **development 结果**：MLP=`41.25% success / 8.33% FAR / 0.675s`，feedback-rule=`48.75% / 7.14% / 2.533s`。MLP 通过安全和成本目标，success 差 `-7.5 pp` 未通过非劣界；overall fail，Pareto 关系为 non-dominated tradeoff。
+- **配对不确定性**：10,000 次 bootstrap 的 learned-minus-rule success 差 95% CI=`[-13.75,-2.50] pp`，cost 差 CI=`[-2.818,-1.023]s`。本结果是 development diagnostic，不是 final held-out claim。
+- **产物**：`configs/stage3b_pareto_gate_v1.json`、`tools/evaluate_stage3b_pareto_gate.py`、`tools/test_stage3b_pareto_gate.py`、`outputs/lilocbench/stage3b_v2_protocol_fixed_eval_r1/pareto_gate_development.json`。
+
+### Stage 3B corrected targeted DAgger r2（2026-10-12，completed / Gate fail）
+
+- **数据**：40--59帧四序列重新执行 live-cost 两步 Oracle，80帧产生208个 on-policy states、893个 root action nodes；全部 prior cost 与在线 state cost 一致。on-policy targets 为 Accept-optimal=32、Geometry-optimal=11、Memory-optimal=30、high-regret=14、premature-Accept=2。
+- **训练修正**：DAgger states 强制进入 train，原始 Oracle 32--39帧作为不加权 validation；targeted weights 只作用于带 DAgger provenance 的状态，最大权重4，不做乘法叠加。
+- **结果**：成本约束内最佳仍是进入本轮前 MLP=`41.25% success / 8.33% FAR / 0.675s`。r2 policy variants 为37.5--40% success；全 value head 达45%且FAR=0，但成本2.352s、Geometry=55%；warm-start 为32.5%/7.14%/0.991s。没有模型达到46.75%/10%/1s三目标。
+- **判定（随后经 r1 审计修正）**：不替换当前 checkpoint，不继续在60--79 development帧调权重。原先将低成本 policy 的不足归为 terminal under-accept 只是待验假设；r1 on-policy Q audit 已在保留 checkpoint 上否定该假设。下一步先做 acquisition value/observation/target diagnosis。
+- **产物**：`outputs/lilocbench/stage3b_v2_corrected_dagger_r2/round_summary.json`、`outputs/lilocbench/stage3b_v2_corrected_targeted_*`、`configs/stage3b_targeted_dagger_v1.json`。
+
+### Stage 3B on-policy Q-calibration audit r1（2026-10-13，completed / diagnostic）
+
+- **范围**：当前保留的低成本 checkpoint 在 corrected r2 的 208 个 policy-induced states
+  上只读重算预测 Q、policy logits 与同状态 live-cost Oracle 值；不运行工具、不改训练集或 checkpoint。
+- **terminal 结论**：79 个 verifier-passed states 中，Accept Q 的 signed bias 是 `+0.087`
+  （MAE=`0.215`）；32 个 Oracle-Accept-optimal state 没有一个被 policy 或 Q-head 漏 Accept，
+  两个头各有2次 over-accept。故“当前 MLP 因 `Qhat(Accept)` 系统偏低而 under-accept”被本批
+  on-policy evidence 否定。
+- **acquisition 结论**：Geometry/Localize/Memory 的 signed Q bias 为
+  `+0.049/+0.054/-0.020`；Geometry 相对廉价替代的 margin 相关性为`0.216`、符号准确率
+  `77.5%`，模型的正 Geometry margin 占`21.25%`，Oracle 仅`8.75%`。候选来自
+  Reloc3r/Memory 时 margin sign accuracy 仅`47.1%/61.9%`，无 candidate root 为`96.3%`。
+- **head 分歧**：policy/Q-head 在`84/208=40.4%` states 分歧；Q-head 的平均 Oracle
+  regret 不低于 policy（`0.0880 vs 0.0878`），但平均相对 Oracle cost 更高
+  （`0.468s vs 0.065s`）。这与全 value-head 的高 geometry/高成本结果一致。
+- **判定**：终端接受不是下一步主假设；下一步是 cost-sensitive acquisition advantage/
+  success-gain 分解和 candidate/Memory recovery strata 的对比性数据。60--79 不再用于调参。
+- **产物**：`tools/analyze_stage3b_q_calibration.py`、`tools/test_stage3b_q_calibration.py`、
+  `outputs/lilocbench/stage3b_v2_q_calibration_audit_r1/q_calibration_audit.json`。
+
+### Stage 3C recovery/cost controller r1--r2（2026-10-13，completed / Gate fail）
+
+- **目的**：检验“分别学习 action 的 correct-recovery probability 与新增成本，再由
+  显式 controller 排序”是否能解决 Stage 3B 的 recovery-state Geometry 选择不足。
+- **训练**：由 corrected live-cost Oracle / targeted DAgger 构建 1,116 grouped states、
+  4,650 acquisition labels；MLP 的 temporal-tail validation 为 recovery Brier=0.1275、
+  cost MAE=0.229s、Geometry margin sign=89.38%。XGB classifier/regressor 与
+  XGBRanker 仅作离线 diagnostic（显式 controller/XGBRanker Geometry margin sign
+  为 76.25%/95.63%），不进入 deployed checkpoint。
+- **r1 作废原因**：controller 错将 Memory `verified` candidate 作为可 Accept 的终止
+  证据，造成 20 次 direct Memory Accept 且全错。该安全接口已修复为 Memory 只能
+  提供 context，必须重新取得 Reloc3r 或 RoMa evidence；不能引用 r1 指标。
+- **r2 真实 GPU 四序列结果**：80 个共同帧、causal audit 全部通过，
+  success=42.5%、FAR=8.11%、mean cost=1.165s、Geometry frame rate=1.25%。
+  feedback-rule 为48.75%/7.14%/2.533s/53.75%。Pareto Gate fail：success 差
+  -6.25pp（CI [-12.5,-1.25]pp）且 cost 超过1s，只有 FAR 与相对 rule 的成本优势通过。
+- **判定**：不能以高离线 ranking accuracy 主张 learned acquisition 已经成功；当前
+  bottleneck 是 policy-induced verified-candidate recovery state 的在线排序/终止耦合。
+  保留 Stage 3B checkpoint，不进入 Qwen/RL；下一项是新 split 的 recovery-state
+  calibration 与一个真正部署的 ranking-controller baseline。
+- **产物**：`configs/stage3c_recovery_policy_v1.json`、
+  `tools/{build_stage3c_recovery_dataset,train_stage3c_recovery_policy,stage3c_recovery_policy,train_stage3c_xgboost_diagnostic}.py`、
+  `outputs/lilocbench/stage3c_recovery_eval_r2/pareto_gate.json`。
+
+### Stage 3C.5 fresh-split XGBRanker diagnosis（2026-10-13，completed / diagnostic negative）
+
+- **协议**：冻结只见过 0--59 帧的 Stage 3C XGB classifier/regressor/ranker；在四序列
+  80--99 帧部署 XGBRanker acquisition controller。rank score 仅用于 acquisition 排序，
+  calibrated `P-C` 与 verifier 继续负责 terminal safety。每个实际 policy decision 后
+  fork 同一 live state，并以相同两步、live-cost Oracle 标注机会；在线 policy 不可见 GT/
+  Oracle。
+- **对照结果**：XGBRanker=52.5% success / 6.67% FAR / 0.719s / 0% Geometry；
+  feedback-rule=57.5% / 9.80% / 2.272s / 41.25% Geometry。四序列80帧 causal audit
+  全通过。Pareto Gate fail：success -5pp（CI [-10,-1.25]pp），FAR 与成本通过。
+- **Geometry opportunity audit**：Oracle Geometry-optimal=5（其中 recovery=4），
+  policy Geometry calls=0，recall=0%，因此 precision 未定义；missed opportunity 平均
+  utility regret=0.750。160 个 Geometry-vs-cheap state 中，55.6% 为预测 `ΔP>0` 但
+  被 `lambda*ΔC` 压制；XGBRanker 只在1个、explicit controller 只在13个 state 偏好
+  Geometry。
+- **判定**：反驳“仅 MLP/joint-training 造成 Geometry 漏调”的单点解释；当前 evidence
+  state + data coverage 未在 fresh policy-induced recovery states 上泛化。此结果不足以声称
+  information-theoretic observability failure，故不进入 Qwen/VLM；先补高价值几何可观察
+  特征，并在全新 split 重复同一 recall audit。
+- **产物**：`configs/stage3c5_xgbranker_fresh_split_v1.json`、
+  `tools/stage3c_xgboost_policy.py`、`tools/analyze_stage3c_geometry_opportunities.py`、
+  `outputs/lilocbench/stage3c5_xgbranker_fresh_eval_r1/{geometry_opportunity_audit,pareto_gate_fresh_split}.json`。
+
+### Stage 3D Recovery Observability v1（2026-10-13，implemented / diagnostic negative）
+
+- **问题定义**：验证 Geometry 调用前的可观测证据是否足以预测其边际恢复价值；冻结
+  XGBRanker 和 terminal verifier，不以更大模型掩盖 observation 缺口。
+- **实现**：`tools/stage3d_features.py` 提供 F0/F1/F2/F3（维度20/30/36/43）的
+  pre-Geometry feature ladder，并对 RoMa/PnP/inlier/reprojection/epipolar 字段 fail
+  closed。`tools/lilocbench_agent_backend.py` 的 `--stage3d-preaction-features` 在
+  cheap Reloc3r action 内计算 ORB/Hamming correspondence spatial statistics 和
+  appearance-change cue；计算耗时纳入该 action receipt/cost。`tools/collect_stage3d_recovery_opportunities.py`
+  从 live-cost Oracle 选择 751 个 targeted recovery/boundary states。
+- **fresh split 诊断**（四序列80帧，80--99；旧 ladder 记录中的可选字段大多缺失）：
+  F0=`51.25% / 4.65% / 0.945s / 7.5%`，F1=`50.00% / 4.76% / 0.677s / 7.5%`，
+  F2=`52.50% / 8.70% / 0.602s / 2.5%`，F3=`51.25% / 6.82% / 0.806s / 5.0%`
+  （依次为 success/FAR/cost/Geometry rate）；feedback-rule 为 `57.50% / 9.80% /
+  2.272s / 41.25%`。四个版本的 Geometry opportunity recall 均为 `0%`（分别
+  0/8、0/4、0/6、0/5），Gate 未通过。
+- **解释边界**：本轮证明当前 feature+coverage+controller 组合仍漏掉 fresh
+  policy-induced Geometry opportunities，但不能据此声称 structured observation
+  已达到信息论上限；此前训练轨迹没有真实 ORB optional cues。下一轮必须在新 split
+  开启 pre-action extractor，重训 F1/F3，再做相同 opportunity audit。
+- **No-Go**：在 appearance/change cue 尚未证明增加 opportunity recall 前，不进入
+  Qwen/Qwen-VL 或 RL；最终指标仍为 opportunity recall/precision/regret、Success--Cost--FAR
+  Pareto，而不是单独 offline ranking accuracy。
+
+### Stage 3D Recovery Observability v2（2026-10-13，completed / Gate pending baseline）
+
+- **协议**：Stage 3C.6 component utility controller；F0/F1/F2/F3 为24/34/40/47维；
+  四序列100--119帧、每层80帧、真实GPU工具、两步live-cost Oracle。可选特征均在
+  Geometry调用前获得并计入成本，post-Geometry字段fail closed。
+- **闭环结果**：F0=`58.75% success / 2.08% FAR / 1.553s / 41.25% Geometry`；
+  F1=`56.25% / 0% / 1.459s / 43.75%`；F2=`57.50% / 0% / 1.298s / 41.25%`；
+  F3=`52.50% / 2.33% / 1.125s / 35.00%`。
+- **Opportunity audit**：F0/F1/F2/F3 的 Geometry recall 分别为
+  `9/17=52.94%`、`8/15=53.33%`、`8/15=53.33%`、`5/13=38.46%`；precision 分别为
+  `27.27%/22.86%/24.24%/17.86%`。acquisition admission recall 全部高于96.8%。
+- **判定**：v1 的0% recall不是结构化 observation ceiling；targeted coverage 与协议
+  修正有效。但 F1--F3 未优于 F0，F3 appearance/change proxy 明显负迁移。瓶颈已从
+  terminal admission 收敛为 Geometry-vs-cheap 的排序与校准。
+- **Gate边界**：100--119尚无同协议 feedback-rule，故不能正式宣称 learned policy
+  超过规则策略。先补同split paired baseline，再在F0/F2上做显式 pairwise Geometry
+  advantage calibration；暂不进入Qwen/Qwen-VL/RL。
+- **产物**：`outputs/lilocbench/stage3d_v2_fresh_collect_r1/aggregate_summary.json`、
+  `tools/summarize_stage3d_ladder.py`。
+
+### Stage 3D v2.1 same-split feedback-rule baseline（2026-10-14，completed / Gate fail）
+
+- **协议**：在 Stage 3D 100--119 四序列/80帧 split 上，使用同一 Reloc3r backend、
+  verifier、Memory、两步 live-cost Oracle、2次 acquisition、30s budget 和 pre-action
+  feature cost accounting 跑 feedback-rule。
+- **baseline**：feedback-rule=`61.25% success / 2.00% FAR / 1.597s / 52.50% Geometry`。
+  所有80帧 causal 字段检查通过。
+- **paired结果**：F0 相对 rule=`-2.50pp success / +0.08pp FAR / -0.045s cost`，success
+  95% CI=`[-6.25,0]pp`；F2=`-3.75pp / -2.00pp / -0.299s`，success CI=`[-8.75,0]pp`，
+  cost CI=`[-0.523,-0.072]s`。
+- **判定**：F0/F2 均未过三目标 Gate：F0 只差0.5pp非劣界但成本优势不稳定；F2 安全/成本
+  更好但 success 低于非劣界，且二者 cost 都高于预注册1s上限。故只能报告
+  non-dominated success--cost trade-off，不能报告 learned > feedback-rule。
+- **下一步**：冻结F0/F2，使用 shared-state audit 后专门训练 Geometry-vs-best-cheap
+  advantage pairwise/ranking calibration；停止扩充F3，不进入Qwen/VLM/RL。
+- **产物**：`outputs/lilocbench/stage3d_v2_feedback_rule_fresh_baseline_r1/aggregate_summary.json`、
+  `outputs/lilocbench/stage3d_v2_fresh_collect_r1/{f0,f2}/pareto_gate_feedback_rule_same_split.json`、
+  `tools/evaluate_stage3d_pareto_gate.py`。
+
+### Stage 3D F0/F2 baseline freeze（2026-10-14）
+
+- **冻结对象**：F0 checkpoint（最高success）和F2 checkpoint（零FAR/较低成本），以及
+  同 split feedback-rule、verifier、utility、feature-ladder config 和全部结果摘要。
+- **约束**：后续 Geometry-advantage、shared-state audit 和新策略不得覆盖、微调或基于
+  100--119结果选择 F0/F2 超参数；它们只作为固定可复现对照。新的最终 split 必须重新
+  运行 feedback-rule。
+- **完整性**：19个配置、checkpoint与结果产物的 SHA-256 记录在
+  `outputs/lilocbench/stage3d_v2_frozen_baselines_r1/freeze_manifest.json`，由
+  `tools/verify_stage3d_frozen_baselines.py` 验证。
+
+### Stage 3E recovery/cost pairwise ranking（2026-10-14，completed / fresh diagnostic mixed）
+
+- **实现**：由1,106个 recovery-targeted states（含114个 policy-induced DAgger train-only
+  states）训练双头 MLP，预测 `P_recover(s,a)` 与执行前 `C_hat(s,a)`；以 regret-scaled
+  pairwise Oracle-value loss 监督 Geometry/Localize/Memory 的排序。terminal control、verifier
+  与F2 pre-action observation 保持冻结。在线 controller 唯一使用 `P_recover-lambda*C_hat`，
+  Geometry margin 只是在 validation 上校准的单一 score 阈值，不再使用 classifier与回归头
+  的AND gate。
+- **协议修正**：最初发现 Stage 3E 为15帧、其对照为20帧，立即作废该比较；runner现接收
+  `MAX_FRAMES`，聚合器加入 `--require-aligned`，会验证每种 policy 的序列名与逐序列帧数。
+  最终评测统一四序列140--154共同前缀，共60帧；`dynamics_0`后续无帧，因此不将60帧伪装为
+  预注册的80帧 Gate。
+- **结果**：Stage3E=`60.00% success / 0% FAR / 3.562s / 60.00% Geometry`；冻结
+  F2=`63.33% / 0% / 4.961s / 50.00%`；feedback-rule=`61.67% / 5.13% / 5.267s / 48.33%`。
+  相对F2：success `-3.33pp`（CI `[-8.33,0]pp`）、cost `-1.40s`（CI `[-1.99,-0.82]s`）；
+  相对 rule：success `-1.67pp`（CI `[-8.33,+3.33]pp`）、FAR `-5.13pp`、cost `-1.70s`
+  （CI `[-2.42,-0.98]s`）。全部 online causal audit 通过。
+- **Geometry audit**：Stage3E opportunity recall=`5/7=71.4%`、precision=`5/36=13.9%`、
+  acquisition regret=0.0606；F2=`6/8=75.0%`、`6/30=20.0%`、0.0934；rule=`7/10=70.0%`、
+  `7/29=24.1%`、0.1085。Stage3E 的核心失败不是漏掉 Geometry，而是过度放行低价值
+  Geometry，导致更低局部 ranking regret 未转换为更多终端正确接受。
+- **判定**：不替换 F2；不报告 Gate pass（共同帧数小于80，且绝对成本>1s）。本轮证明
+  recovery-targeted ranking 具有更好的 Geometry opportunity recall/regret 和安全--成本
+  trade-off，但尚未证明端到端 learned policy 优于 F2/rule。下一步固定 F2 feature schema，
+  只学习 Geometry 相对 best-cheap 的 expected terminal-success advantage，并用 precision /
+  expected-gain-constrained threshold 校准；不继续加特征，不进入 Qwen、Qwen-VL或RL。
+- **产物**：`outputs/lilocbench/stage3e_recovery_cost_ranking_r1/fresh_140_154/aggregate_summary_aligned.json`、
+  `pareto_vs_frozen_f2.json`、`pareto_vs_feedback_rule.json`，以及
+  `tools/{build_stage3e_recovery_ranking_dataset,train_stage3e_recovery_ranking,stage3e_recovery_ranking_policy}.py`。
+
+### Stage 3F frozen F2 stability validation（2026-10-14，completed / partial positive）
+
+- **冻结与范围**：F2 checkpoint、F2 feature schema、verifier、utility、budget和seed全部冻结；
+  仅复验100--119、120--139、140--154三个不重叠 causal block，未用任何结果改变策略。
+- **success/FAR**：F2-minus-rule success依次为`-3.75pp/-1.25pp/+1.67pp`，方向不稳定；
+  pooled 220帧为F2=`54.09% success / 0.83% FAR`，rule=`55.45% / 3.17% FAR`，success差
+  `-1.36pp`（CI `[-3.64,+0.45]pp`）。故否定“F2已稳定全面优于 feedback-rule”。
+- **去偏成本复验**：新增同 GPU 同 backend 的 AB/BA crossover runner；首轮发现 policy
+  position 可显著改变 receipt time，故仅用同 `(sequence, block)` 的反向双运行均值。去偏后
+  F2-minus-rule cost为`-0.725s/-1.662s/-0.098s`，pooled=`-0.828s/frame`；效率优势方向稳定，
+  但一对AB/BA不能作为最终论文 latency estimate。
+- **判定**：F2 保留为 safety--cost Pareto baseline，不替换 feedback-rule，也不以最新60帧
+  宣称 success dominance。当时预注册的后续为 paired F2-vs-rule disagreement audit；
+  该审计现已由 Stage 3G 完成，且未支持继续训练 Geometry advantage。
+- **产物**：`tools/run_stage3f_f2_crossover.sh`、`tools/aggregate_stage3f_f2_stability.py`、
+  `outputs/lilocbench/stage3f_f2_stability_r1/f2_stability_summary_order_debiased.json`。
+
+### Stage 3G paired disagreement + terminal alignment（2026-10-14，completed / Stage 3 closed）
+
+- 220共同帧中 `both-success/both-failure/F2-only/rule-only=118/97/1/4`；rule-only 仅1帧
+  是 F2 漏掉 Oracle Geometry opportunity，1帧是错过 Oracle Accept，其余是非 Geometry
+  acquisition 分歧。
+- legacy feedback-rule 为 verifier 后自动 Accept，F2 为显式 Accept/Defer；旧比较存在
+  terminal-interface confound。
+- terminal-aligned rule 固定 acquisition、使用冻结 F2 terminal controller。F2=
+  `54.09% success / 0.83% FAR`，legacy rule=`55.45% / 3.17%`，terminal-aligned rule=
+  `53.64% / 3.28%`；legacy rule 对 F2 的正确帧差由 `+3` 变为 `-1`。
+- 判定：Stage 3 收口，不继续同 split 的 Geometry/controller 调参，不进入 Qwen/VLM/RL；
+  转向 failure-triggered、scene-disjoint 的 active-evidence realizable-value validation。
+- 产物：`tools/audit_stage3f_f2_disagreements.py`、`tools/close_stage3.py`、
+  `outputs/lilocbench/stage3f_terminal_aligned_feedback_r1/`。

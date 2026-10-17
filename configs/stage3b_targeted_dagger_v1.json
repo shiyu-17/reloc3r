@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "stage3b_targeted_dagger_v1",
+  "default_weight": 1.0,
+  "maximum_weight": 4.0,
+  "tag_weights": {
+    "accept_optimal": 2.0,
+    "high_oracle_regret": 2.0,
+    "memory_optimal": 3.0,
+    "geometry_optimal": 4.0,
+    "premature_accept": 4.0
+  },
+  "high_oracle_regret_threshold": 0.10,
+  "combination": "maximum, not product",
+  "rationale": "Preserve the natural replay distribution while increasing bounded gradient contribution from rare high-value policy-induced states. Validation and all closed-loop metrics remain unweighted."
+}

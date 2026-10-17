@@ -92,14 +92,25 @@ def build_sequence(args, sequence):
             float(ev.get("frame_change", 0.0)) / 0.20)
         has_geometry = bool(gp is not None and inliers > 0)
         if has_geometry:
-            geometry_risk = max(
+            # Keep state-independent geometry quality separate from evidence
+            # that depends on the previous accepted state.  The old code only
+            # exported the max-combined geometry_risk, which made it
+            # impossible for dynamic re-trust to decay the previous-state
+            # term without also retaining the same term inside the max.
+            geometry_intrinsic_risk = max(
                 max(0.0, 1000.0 - inliers) / 1000.0,
                 float(reproj or 0.0) / 3.0,
-                1.0 - pair_support_ratio,
+                1.0 - pair_support_ratio)
+            geometry_cross_source_risk = max(
                 geom_t_cons / 2.0, geom_r_cons / 30.0,
-                geom_t_mem / 2.0, geom_r_mem / 30.0,
+                geom_t_mem / 2.0, geom_r_mem / 30.0)
+            geometry_previous_state_risk = max(
                 geom_t_prev / 2.0, geom_r_prev / 30.0)
+            geometry_risk = max(geometry_intrinsic_risk,
+                                geometry_cross_source_risk,
+                                geometry_previous_state_risk)
         else:
+            geometry_intrinsic_risk = geometry_cross_source_risk = geometry_previous_state_risk = 0.0
             geometry_risk = 0.0
         reliability_risk = float(max(candidate_risk, temporal_risk, geometry_risk))
         rows.append({
@@ -110,7 +121,11 @@ def build_sequence(args, sequence):
             "geometry_requested": geometry_requested,
             "geometry_reference_indices": tr.get("geometry_reference_indices", []),
             "candidate_risk": float(candidate_risk), "temporal_risk": float(temporal_risk),
-            "geometry_risk": float(geometry_risk), "reliability_risk": reliability_risk,
+            "geometry_risk": float(geometry_risk),
+            "geometry_intrinsic_risk": float(geometry_intrinsic_risk),
+            "geometry_cross_source_risk": float(geometry_cross_source_risk),
+            "geometry_previous_state_risk": float(geometry_previous_state_risk),
+            "reliability_risk": reliability_risk,
             "top10_candidate_dispersion_m": float(top10_t),
             "top10_candidate_dispersion_deg": float(top10_r),
             "consensus_dispersion_m": float(cons_t), "consensus_dispersion_deg": float(cons_r),
@@ -166,7 +181,13 @@ def main():
     manifest = {
         "experiment": "AVL-012", "score_version": "v1",
         "thresholds": list(THRESHOLDS),
-        "formula": "max(candidate dispersion risk, temporal/appearance risk, geometry inlier/reprojection/pair-support/cross-check risk)",
+        "formula": "max(candidate dispersion risk, temporal/appearance risk, geometry intrinsic risk, cross-source risk, previous-state risk)",
+        "geometry_risk_components": {
+            "intrinsic": "max(inlier deficit, reprojection, 1-pair-support-ratio)",
+            "cross_source": "max(geometry-vs-consensus, geometry-vs-memory)",
+            "previous_state": "max(geometry-vs-previous-state)",
+            "dynamic_retrust": "only previous_state is state-decayed; intrinsic and cross_source remain active",
+        },
         "query_gt_read": False, "uses_future": False, "selection_uses_gt": False,
         "num_frames": len(all_rows), "sequences": list(SEQUENCES),
     }

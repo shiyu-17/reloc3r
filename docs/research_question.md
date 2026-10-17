@@ -1,17 +1,21 @@
 # 面向动态室内环境的 Agentic Visual Localization：研究问题
 
-最后整理：2026-10-10
+最后整理：2026-10-12
 
 ## 1. 项目目标与核心研究问题
 
-项目主线是 **Failure-aware Agentic Visual Localization in Dynamic Indoor Environments**。系统以连续 RGB 序列为输入，先维护时序定位状态，再在当前状态不可靠时恢复全局定位。系统最终应能在当前观测受到行人遮挡、长期场景变化或参考不匹配影响时：
+项目主线是 **Failure-aware Agentic Visual Localization in Dynamic Indoor Environments**。这里的 Agent 定义为一个多轮 evidence-seeking policy：系统以连续 RGB 序列为输入，维护带来源和时效性的定位状态；当证据不足或相互冲突时，主动决定下一步获取哪一项地图、历史或几何证据，根据工具返回更新定位假设，再决定继续取证、Accept、Reject 或 Defer。它不是对 Reloc3r/Memory/RoMa 做一次性分类，也不直接回归 pose。
+
+系统最终应能在当前观测受到行人遮挡、长期场景变化或参考不匹配影响时：
 
 1. 判断当前定位证据是否可靠；
 2. 分析失败更可能来自候选冲突、动态遮挡、长期外观变化、历史失配或几何退化；
-3. 在直接使用 Reloc3r、重选 reference、查询历史 memory、调用 HLoc/RoMa、拒绝输出之间做预算受限的选择；
+3. 判断当前缺少什么有区分力的证据，并在检索替代 reference、查询历史 experience、调用定位/验证工具和停止之间做预算受限的多轮选择；
 4. 用独立证据验证候选位姿，并记录可审计的决策链。
 
-核心研究问题是：在相同 reference database、可用信息和统一计算预算下，连续序列上的 tracking、历史状态和失败状态是否能比逐帧调用 Reloc3r 或 Always-RoMa 更可靠地识别何时需要全局恢复，并减少灾难性误定位；若不能，问题是否可以归因于参考选择、历史建模或验证能力，而不是缺少语言 Agent。
+核心研究问题是：在相同 reference database、可用信息和统一计算预算下，策略能否根据连续定位状态选择能够区分竞争 pose hypothesis 的新证据，比固定工具、固定调用顺序和 one-shot router 更可靠地恢复全局定位，并减少错误接受、状态污染和无效工具调用？
+
+完整方法、相关工作、训练和 IROS 评测路线见 `docs/visual_localization_agent_roadmap.md`。
 
 ## 2. 核心假设与预期创新
 
@@ -20,12 +24,13 @@
 - **H1：参考可靠性是第一病因。** 固定 Top-k 聚合会把错误或不兼容的 reference 混入 pose，候选一致性和 reference 重排应能恢复一部分失败。
 - **H2：历史状态具有受限恢复价值。** 只访问当前帧之前、且经过验证的 prediction/memory，可恢复重复视角下的短期连续失败；该收益不能来自未来帧或 query GT。
 - **H3：强几何工具具有互补性。** 在 Reloc3r/Memory 仍失败的帧上，HLoc-style 或 RoMa 可能恢复部分结果，但两者都不会覆盖所有失败，输出必须继续验证或拒绝。
-- **H4：动态调度需要比单一风险阈值更丰富的证据。** 检索、候选离散度、跳变、外观变化、历史可靠性和独立几何证据可能形成可审计的分流信号；只有在确定性规则无法解释的剩余决策价值被证明后，才有必要引入 Agent。
-- **H4：连续时序状态比单帧语义更接近真实决策对象。** tracking/motion、当前位姿、历史可靠帧、连续失败长度和 reference reliability 的联合状态，应能区分“短暂观测变差但可由历史维持”和“状态已漂移、需要全局恢复”。
+- **H4：主动取证比一次性路由更接近 Agent 的决策价值。** 检索、候选离散度、跳变、外观变化、历史可靠性和独立几何证据共同定义当前歧义；策略的动作应改变 active references、验证证据或历史查询，从而产生新的 observation，而不是只在冻结 pose 输出之间分类。
+- **H5：连续时序状态比单帧语义更接近真实决策对象。** tracking/motion、当前位姿、历史可靠帧、连续失败长度和 reference reliability 的联合状态，应能区分“短暂观测变差但可由历史维持”和“状态已漂移、需要全局恢复”。
+- **H6：证据来源、依赖和时效必须显式建模。** 共享同一 reference 或错误 anchor 的多个一致结果不能被当成独立支持；陈旧状态约束应随 anchor age/reject streak 衰减，而 fresh intrinsic/cross evidence 保持有效。
 
 ### 预期创新
 
-创新点不是简单叠加定位器，而是形成可复现的“连续观测—状态维护—全局恢复—验证—状态更新”闭环：动作、预算、reference、历史状态、验证证据和拒绝原因均可追溯，并在统一成本和时间隔离下评价。语言 Agent 仍是后置选择，而不是当前系统的前提。
+预期创新是形成可复现的“连续观测—定位假设—主动取证—工具反馈—验证—状态/Memory 更新”闭环：动作、预算、reference、证据 provenance、历史依赖、验证结果和拒绝原因均可追溯，并在统一成本和严格时间隔离下评价。VLM/SFT policy 只有在相同 observation/action/budget 下超过确定性主动取证和轻量序列策略时，才构成语言/视觉推理的独立贡献。
 
 ## 3. 已证明的稳定结论
 
@@ -45,6 +50,10 @@
 12. **AVL-013 修正后仍显示 Reject 的 coverage bottleneck。** v1 的跨序列统计曾把最长 Reject 错报为 `991`，按序列重算的真实最大值为 `324`；deadlock 现象仍成立。v3 使用 selective-geometry 规则和修正 evaluator 后，test coverage=`54.23%`、最终 success=`51.57%`、accepted-pose accuracy=`95.10%`、最长 Reject=`26`；119 个 Reject 段中 117 个恢复、2 个右删失，恢复到首个 correct 的平均时间为 `4.21` 帧。错误 state update 从 no-reject 的 `89` 降至 `27`，但全帧 success 显著下降。Reject 能阻断错误写回，但当前恢复证据仍过于保守。
 13. **AVL-014 的 selective-geometry 重校准未改变主要瓶颈。** AVL-012 改为只有实际调用 geometry 的帧使用 geometry evidence 后，validation 仍冻结 threshold=`1.5`；test coverage=`55.41%`、selective accuracy=`95.56%`。该风险分数仍不能同时保持高 coverage 和高可靠性。
 14. **AVL-011 jump-guard 配对消融表明原始 91.24% 依赖宽松几何门。** 在相同 cache 和动作规则下，将 geometry jump guard 从 `100m/180°` 收紧至 `2.5m/60°`，test success=`87.50%`、coverage=`98.82%`、最长失败=`14`，低于无效 guard 的 `91.24%/100%/4`。因此原始结果应称 cached deterministic route，而不是严格运动验证后的最终可靠性。
+15. **AVL-015 Q1 证明当前 pose action pool 存在互补与理论成本空间，但尚未证明可部署收益。** 加入因果 Historical-keyframe Relocalization 后，Consensus/Memory/HLoc-style/RoMa/Historical 的全量 success 为 `70.64/76.71/88.62/91.21/41.16%`，Pose Oracle union=`95.99%`；冻结 temporal test 分别为 `72.15/76.87/88.98/92.22/44.78%`，union=`96.95%`。Memory/RoMa 仍有 `56/302` 个 only-action 帧；Historical 相对全部其他 map/geometry action 只有 `4` 个 all-frame、`2` 个 test 的独占成功帧，未形成稳定新能力。固定动作的非支配 frontier 为 Memory=`76.71%/0/3397.3s`、HLoc=`88.62%/1696/2492.5s`、RoMa=`91.21%/1696/6622.6s`（success/geometry calls/latency）。统一 shared-retrieval 成本边界下，Historical 固定成本约 `3714.7s`；GT 后验 cost-aware oracle 在达到 RoMa action pool 成功率时约 `2461.5s`，达到五动作 union 时约 `2599.0s`。这些下界使用每帧 outcome，不能作为在线策略或 Agent 收益。
+16. **AVL-015 Q2 支持 source-specific verification，但当前 coverage 仍是瓶颈。** 在旧 causal route 选择出的来源子集上，Consensus/Memory/Geometry 分别达到 `94.56%/93.10%/99.14%` selective accuracy，对应 coverage=`84.97%/50.58%/34.58%`。该结果没有包含 dynamic re-trust，也不是全帧 coverage；它只支持“不同来源不能共享一个未经校准的 reliability score”。
+17. **AVL-015 Q2 dynamic re-trust 的首轮回放属于 implementation-limited 结果，已完成风险分解复核但仍需在线重验。** 旧回放报告 test coverage=`45.87%`、accepted accuracy=`96.57%`、false acceptance=`3.43%`、full-frame success=`44.29%`；复核发现其 `geometry_risk` 混入了 previous-state disagreement。修复后 componentized replay 中 fresh/stale score 在 `303/1108` 条 geometry-source evidence 上发生变化，test coverage=`50.00%`、accepted accuracy=`96.85%`、full-frame success=`48.43%`，且审计仍满足 `query_gt_read=false/uses_future=false/selection_uses_gt=false`。这只证明实现路径已生效，不能替代真实 route regeneration，也不能直接宣称 re-trust 带来 Agent 收益。
+18. **AVL-015 Q3 表明当前 Historical Memory 实现没有稳定的独立恢复能力。** 原始因果候选在 test 上 coverage=`100%`、success=`44.78%`；加入 Memory 专属 verifier 后，冻结 test coverage=`21.85%`、selective accuracy=`63.96%`、full-frame success=`13.98%`，且 Historical-only 相对 Consensus/Memory/HLoc/RoMa 在 test 为 `0` 帧。所有 1696 帧 trace 均满足 `query_gt_read=false/uses_future=false/selection_uses_gt=false/historical_future_access=false`。因此当前实现更像高成本、低可靠的历史候选生成器，不应把它写成 Memory 新能力；后续若继续，只能改进历史关键帧选择/相对匹配和 verifier，而不是直接进入 Agent。
 
 证据入口：`outputs/lilocbench/AVL-002/`、`AVL-003/summary_all.json`、`AVL-004/`、`AVL-005/unified_cost/summary.json`、`AVL-006/`、`AVL-007/summary.json`。
 
@@ -80,43 +89,79 @@
 - 近邻 memory、同序列规则发现和 test-set adaptation 会高估泛化；所有未来实验必须冻结协议并单独记录。
 - RoMa 运行的随机性、非零畸变下未先 undistort、HLoc-style 地图定义等实现限制，要求按 seed 和工具边界报告，不扩大结论。
 
-## 7. Go / No-Go 条件
+## 7. 原型启动与论文 Go 条件
 
-### 进入 Agent（Go）必须同时满足
+### 受控 Agent 原型可以立即开始
 
-1. 有独立 held-out 或跨数据集证据，且测试集未参与阈值、reference 或动作发现；
-2. 有无 GT 在线 trace，证明决策只使用当前及过去信息；
-3. 在统一端到端成本、reference 预算和成功阈值下，确定性 baseline 存在稳定且可复现的剩余决策差距；
-4. 视觉/时序证据能解释“相似数值风险为何需要不同动作”，而不是仅靠更多计算；
-5. 通过独立 verification/reject 降低错误接受，而不是把高风险 pose 强行输出。
+当前允许实现：
 
-### 当前 No-Go / Hold
+1. 策略可交互的 `reset/step` causal environment；
+2. 能改变 reference/verification evidence 的参数化 action；
+3. fixed/random/geometry-greedy/有限深度搜索基线；
+4. 训练场景上的 tool-expanded trajectory 和最小 Agentic SFT；
+5. 与相同 observation/action 的轻量 sequential policy 配对比较。
 
-上述条件尚未同时满足。当前停止真正的 LLM/多 Agent 实现，继续进行 deterministic reference、memory、geometry、验证、预算和审计分析。若 Always-RoMa 在公平预算下持续支配路由，或独立测试无法显示可利用的上下文分流收益，则不应把主张扩大为 Agent 优于固定策略。
+这一步是验证研究假设，不代表已经获得 Agent 论文结论。
+
+### 主张 Agent/VLM 收益必须同时满足
+
+1. 有独立 held-out、scene-disjoint 或跨数据集证据，且测试集未参与阈值、reference、轨迹或动作发现；
+2. 有无 GT 在线 trace，证明决策只使用当前及过去信息，并且策略动作真正改变后续 observation、Memory 和 state；
+3. 在冻结 test、统一端到端成本、reference/matching 预算和成功阈值下，主动取证相对 fixed-order 与最佳固定策略形成有意义的 Pareto 改进；
+4. 任务特定 learned policy 在相同工具、verifier、输入和预算下稳定超过 one-shot router、geometry-greedy 与轻量 sequential policy；
+5. source/pose-specific verification、Reject/Recovery 和 Memory invalidation 能降低错误接受与状态污染，而不是只通过大量 abstention 提高 selective accuracy；
+6. Agent 只做证据获取、动作选择、信任更新和自适应停止，不直接预测 pose，不访问 query GT 或未来帧。
+
+若主动取证不能超过固定强工具，则冻结 Agent 主张；若主动取证有效但 VLM 不超过轻量 policy，可保留 learned active localization system 的贡献，但不主张语言推理收益。
 
 ## 8. 当前主线决策
 
-主线不变，但策略粒度调整为连续序列：
+2026-10-14 Stage 3G 收口后，当前模块优化停止。F2 与 rule 的220帧最终结果只有5帧不同，
+terminal alignment 又消除了 legacy rule 的表面成功率优势；继续调 Geometry head、terminal
+threshold 或更大 policy 无法形成可信的 Agent 贡献。下一阶段先验证主动取证的可实现 Oracle
+gap：只有在 failure-triggered、scene-disjoint episodes 上证明不同 evidence action 会稳定改变
+terminal outcome，才恢复 learned Agent、SFT 或 VLM 路线。
+
+主线不变，策略粒度调整为“连续状态上的多轮主动取证”：
 
 ```text
 连续 RGB 序列
     ↓
 Temporal Tracking / Motion
     ↓
-Stateful Localization State
-    ├─ 当前位姿状态
-    ├─ 历史可靠帧 / Memory
-    ├─ 连续失败状态
-    └─ reference reliability
+Evidence-aware Localization State
+    ├─ pose hypotheses / belief
+    ├─ evidence provenance / dependency
+    ├─ reliable anchors / Experience Memory
+    ├─ reject streak / motion uncertainty
+    └─ remaining tool budget
     ↓
-Global Localization / Recovery
-    ├─ Reloc3r
-    ├─ Reference reranking
-    └─ RoMa
+Agent: decide which evidence is missing
     ↓
-Verification
+Retrieve / Estimate / Verify / Query Experience
     ↓
-更新状态 → 下一帧
+New Observation → Update State
+    ├─ evidence insufficient → continue
+    ├─ verified → Accept + Memory update
+    └─ unresolved → Reject / Defer
 ```
 
-当前已完成 AVL-009、AVL-011、AVL-012 与 AVL-013，并修正重验了 AVL-010：Reloc3r temporal edge 会漂移，修正后的 DPVO 状态回放没有显示独立定位收益；Dynamic+LT 的共同失败主要是 reference 外观/结构不兼容、候选一致性错误和强几何误接受，而非空间地图完全缺失。AVL-013 进一步证明 Reject 需要状态老化和恢复机制，否则会死锁；修正 evaluator 后 v3 仍能减少错误 state 写回，但 coverage 只有约54%。主线正式采用 **Failure-aware Visual Localization in Dynamic Indoor Environments**：连续序列保留为 Memory、failure streak 和 motion evidence 的输入，但不再承担主要创新性。当前继续 deterministic recovery、global-anchor、reference reliability、Reject 和真实成本校准；不进入 Agent。Memory 只能使用历史信息，Manager 不能使用 GT，所有强几何结果必须经过验证或拒绝。
+当前已完成 AVL-009、AVL-011、AVL-012 与 AVL-013，并修正重验了 AVL-010：Reloc3r temporal edge 会漂移，修正后的 DPVO 状态回放没有显示独立定位收益；Dynamic+LT 的共同失败主要是 reference 外观/结构不兼容、候选一致性错误和强几何误接受，而非空间地图完全缺失。AVL-013 进一步证明 Reject 需要状态老化和恢复机制，否则会死锁；修正 evaluator 后 v3 仍能减少错误 state 写回，但 coverage 只有约54%。
+
+因此底层环境收敛为 **Map Localization + Experience Memory + Geometry + Reliability**：
+
+```text
+Current RGB + Map References + Reliable Historical Keyframes
+    → Pose Candidates
+        ├─ Reloc3r consensus
+        ├─ Historical-keyframe relocalization
+        ├─ Rerank + Reloc3r
+        └─ Rerank + RoMa / HLoc-style
+    → Source-specific Verification
+    → Accept / Reject / Recovery
+    → Update State / Memory / Reference Reliability
+```
+
+DPVO 只保留为 motion/uncertainty evidence，不再作为主要 pose 分支；MASt3R-SLAM 暂不投入。AVL-015 已完成：原始工具有理论互补空间，但当前 Historical Memory 没有稳定独立恢复能力。2026-10-12 复核发现 dynamic re-trust 的旧状态衰减未实际改变 geometry score，因此该负结论需要重验。
+
+当前进入受控原型阶段：先修复不可约风险项和 state trust，建立能因策略动作改变后续 Memory/observation 的环境，再验证“选择下一组 reference 或 held-out verification evidence”是否在相同预算下优于固定顺序。只有主动取证成立后，才进入多场景 Agentic SFT。Memory、Manager 和 Agent 均只能使用当前及历史信息，所有强几何结果必须经过独立验证或拒绝。
