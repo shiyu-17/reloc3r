@@ -1,28 +1,21 @@
-# Tools layout
+# Active tools: LILocBench v1 only
 
-The active research path is intentionally small after the Stage 3 closeout.
+- Prepare data: `download_lilocbench.py` / `.sh`, `prepare_lilocbench.py`.
+- Build frozen NetVLAD reference rankings: `eval_lilocbench_reloc3r.py` (`retrieve` stage).
+- Run and score episodes: `run_lilocbench_unified_episode.py`, then `evaluate_lilocbench_unified_episode.py`.
+- Runtime: `agentic_localization_env.py`, `active_evidence_protocol.py`, `unified_localization_policy.py`, `lilocbench_agent_backend.py`, `lilocbench_geometry.py`.
+- Regression checks: `test_agentic_localization_env.py`, `test_unified_localization_policy.py`.
+- `itt_compat_stub.c` only resolves an optional PyTorch/MKL profiler-symbol mismatch in this conda environment.
 
-## Current mainline
+The retrieval file `outputs/lilocbench/AVL-002/<sequence>/retrieval.npz` is precomputed; its production time is not charged to the episode. Historical scripts and documents were retired to [`outputs/project_cleanup_20261019/`](../outputs/project_cleanup_20261019/). See [project status](../docs/codex_project_state.md) for the current scope.
 
-- `active_evidence_protocol.py`: v2 shared legal-action and trace contract.
-- `agentic_localization_env.py`: causal environment and guarded Memory writes.
-- `lilocbench_agent_backend.py`: live Reloc3r/Geometry backend.
-- `eval_active_evidence_sequential.py`: shared sequential evaluator.
-- `stage3b_policy.py`, `stage3c6_utility_policy.py`, `stage3d_features.py`: frozen structured baselines.
-- `audit_stage3f_f2_disagreements.py`, `close_stage3.py`: Stage 3 audit and closeout.
-- `active_evidence_episodes.py`: failure-triggered episode mining and scene-disjoint split audit.
-- `evaluate_active_evidence_value.py`: episode metrics and frozen realizable-value Go/No-Go gate.
-- `test_agentic_localization_env.py`, `test_stage3b_terminal_control.py`: core causal regressions.
+Run the existing v1 rankings and score a short episode from the repository root:
 
-## Frozen historical experiments
+```bash
+conda activate reloc3r
+export LD_PRELOAD="$PWD/outputs/runtime_compat/libitt_compat_stub.so"
+python -m tools.run_lilocbench_unified_episode --sequence dynamics_0 --start 100 --count 7 --geometry-on-failure --output outputs/lilocbench/v1_run/dynamics_100_106.json
+python -m tools.evaluate_lilocbench_unified_episode --trace outputs/lilocbench/v1_run/dynamics_100_106.json --output outputs/lilocbench/v1_run/dynamics_100_106_score.json
+```
 
-Files named `avl*`, `stage3c*`, `stage3d_geometry*`, or `stage3e*` reproduce completed ablations.
-They are not imported by the next-stage mainline unless a frozen baseline explicitly requires them.
-Do not extend them with new policy variants. New active-evidence work should use the environment and
-shared evaluator above.
-
-The historical scripts remain in place because their outputs are cited by the experiment registry.
-Generated `__pycache__`, one-off smoke outputs, and superseded shell wrappers are not part of the
-research artifact and may be removed.  The retired PoseAgent-style and 7Scenes feasibility work is
-preserved, but intentionally isolated under `experiments/poseagent_style_20261015/`; it is not a
-mainline dependency.
+If the ranking file must be rebuilt, run `python -m tools.eval_lilocbench_reloc3r --stage retrieve --data-root data/lilocbench/prepared_1hz --query-sequence dynamics_0 --output-dir outputs/lilocbench/AVL-002/dynamics_0 --device cuda:0` first.

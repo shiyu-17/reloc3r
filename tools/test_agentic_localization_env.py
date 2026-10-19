@@ -61,9 +61,22 @@ class AgenticEnvironmentTest(unittest.TestCase):
                             "selection_uses_gt": False},
             }
 
+        def retrieve_references_fn(sequence, index, top_k, state):
+            return {
+                "references": [{"reference_index": 7, "score": 0.9},
+                               {"reference_index": 8, "score": 0.8}][:top_k],
+                "groups": [{"name": "A", "reference_indices": [7, 8]}],
+                "execution": {"executed": True, "cache_hit": False,
+                              "query_frame_index": index, "elapsed_s": 0.12,
+                              "stages": ["query_embedding", "map_search"]},
+                "causal": {"query_gt_read": False, "uses_future": False,
+                           "selection_uses_gt": False},
+            }
+
         backend = CallableLocalizationBackend({"seq": 2}, frame_fn,
                                                localize_fn, verify_fn,
-                                               strong_geometry_fn=geometry_fn)
+                                               strong_geometry_fn=geometry_fn,
+                                               retrieve_references_fn=retrieve_references_fn)
         return backend, calls
 
     def test_action_changes_execution_and_only_verified_pose_enters_memory(self):
@@ -140,6 +153,46 @@ class AgenticEnvironmentTest(unittest.TestCase):
         env.step(LocalizationAction.accept())
         self.assertTrue(env.audit_trace()["passed"], env.audit_trace())
 
+    def test_reference_retrieval_is_live_visible_and_costed(self):
+        backend, _ = self.make_backend()
+        env = AgenticLocalizationEnv(backend, budget_s=1.0)
+        obs = env.reset("seq")
+        obs, _, _, _ = env.step(LocalizationAction.retrieve_references(top_k=2))
+        self.assertEqual(obs.last_event["type"], "retrieve_references")
+        self.assertEqual([x["reference_index"] for x in obs.last_event["references"]], [7, 8])
+        self.assertAlmostEqual(obs.state["frame_tool_cost_s"], 0.12)
+        self.assertAlmostEqual(obs.state["remaining_budget_s"], 0.88)
+        env.step(LocalizationAction.localize(7, 8))
+        self.assertTrue(env.audit_trace()["passed"], env.audit_trace())
+
+    def test_reference_retrieval_rejects_cached_results(self):
+        backend, _ = self.make_backend()
+        original = backend._retrieve_references_fn
+        backend._retrieve_references_fn = lambda sequence, index, top_k, state: dict(
+            original(sequence, index, top_k, state),
+            execution={"executed": False, "cache_hit": True,
+                       "query_frame_index": index, "stages": ["cache_lookup"]})
+        env = AgenticLocalizationEnv(backend)
+        env.reset("seq")
+        with self.assertRaises(CausalViolation):
+            env.step(LocalizationAction.retrieve_references())
+
+    def test_policy_can_select_an_earlier_candidate_without_rerunning_it(self):
+        backend, calls = self.make_backend()
+        env = AgenticLocalizationEnv(backend)
+        obs = env.reset("seq")
+        obs, _, _, _ = env.step(LocalizationAction.localize(7))
+        obs, _, _, _ = env.step(LocalizationAction.localize(8))
+        self.assertEqual(len(obs.candidates), 2)
+        self.assertEqual(calls, [(0, (7,)), (0, (8,))])
+        obs, _, _, _ = env.step(LocalizationAction.select_candidate(0))
+        self.assertEqual(obs.candidate["reference_indices"], [7])
+        env.step(LocalizationAction.verify())
+        obs, _, _, _ = env.step(LocalizationAction.accept())
+        self.assertAlmostEqual(env.state.memory[0].pose[0, 3], 0.0)
+        self.assertEqual(obs.frame_index, 1)
+        self.assertEqual(obs.candidates, [])
+
     def test_mismatched_execution_receipt_is_rejected(self):
         backend, _ = self.make_backend()
         original = backend._localize_fn
@@ -215,6 +268,17 @@ class AgenticEnvironmentTest(unittest.TestCase):
         obs, _, _, _ = env.step(LocalizationAction.accept())
         self.assertEqual(obs.frame_index, 1)
         self.assertAlmostEqual(obs.state["frame_tool_cost_s"], 0.0)
+
+    def test_soft_tool_budget_blocks_new_acquisition_but_allows_defer(self):
+        backend, _ = self.make_backend()
+        env = AgenticLocalizationEnv(backend, budget_s=0.1, enforce_tool_budget=True)
+        env.reset("seq")
+        env.step(LocalizationAction.retrieve_references(top_k=2))
+        with self.assertRaises(InvalidAction):
+            env.step(LocalizationAction.localize(7, 8))
+        self.assertEqual(env.state.frame_action_count, 1)
+        obs, _, _, _ = env.step(LocalizationAction.defer())
+        self.assertEqual(obs.frame_index, 1)
 
     def test_state_retrust_decays_only_previous_state_risk(self):
         previous = np.eye(4)

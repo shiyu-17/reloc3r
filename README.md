@@ -1,3 +1,9 @@
+> **Local research branch:** the active agent experiment is now limited to the
+> [LILocBench v1 baseline](docs/codex_project_state.md). See the
+> [short roadmap](docs/visual_localization_agent_roadmap.md) and
+> [experiment history](docs/experiment_history.md). The original Reloc3r
+> documentation follows below.
+
 <p align="center">
   <h2 align="center">[CVPR 2025] Reloc3r: Large-Scale Training of Relative Camera Pose Regression for Generalizable, Fast, and Accurate Visual Localization</h2>
  <p align="center">
@@ -108,13 +114,6 @@ enable it only when the import error occurs:
 gcc -shared -fPIC -O2 -o tools/build/libitt_compat_stub.so tools/itt_compat_stub.c
 export LD_PRELOAD="$PWD/tools/build/libitt_compat_stub.so"
 ```
-
-For the official 7Scenes layout, unpack the downloaded scene archives with:
-
-```bash
-bash tools/extract_7scenes.sh
-```
-
 
 ## Usage
 

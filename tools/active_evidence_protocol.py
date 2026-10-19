@@ -1,30 +1,21 @@
-"""Versioned deployable action contract for active-evidence localization.
-
-Rules, learned policies, and the finite-depth Oracle must call
-``legal_actions`` with the same context.  Evaluator labels never enter this
-module or its returned actions.
-"""
-
+"""Legal actions for the retained LILocBench v1 localization loop."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
-ACTION_PROTOCOL_VERSION = "active_evidence_action_v2"
-ONLINE_RECORD_VERSION = "active_evidence_online_v2"
-EVALUATOR_RECORD_VERSION = "active_evidence_evaluator_v2"
+UNIFIED_LIVE_ACTION_PROTOCOL_VERSION = "lilocbench_v1_precomputed_references"
 
 
 @dataclass(frozen=True)
-class ActionSpace:
-    """First paper protocol: Memory remains state, not a pose-proposal tool."""
+class LiveCapabilities:
+    reference_retrieval: str = "precomputed"
+    strong_geometry: bool = True
 
-    allow_memory_query: bool = False
-    auto_heldout_verify: bool = True
-
-
-DEFAULT_ACTION_SPACE = ActionSpace()
+    def __post_init__(self) -> None:
+        if self.reference_retrieval != "precomputed":
+            raise ValueError("retained v1 baseline requires precomputed references")
 
 
 def observation_dict(observation: Any) -> Mapping[str, Any]:
@@ -36,53 +27,43 @@ def observation_dict(observation: Any) -> Mapping[str, Any]:
     raise TypeError("observation must be a mapping or expose as_dict()")
 
 
-def reference_groups(observation: Any) -> List[Mapping[str, Any]]:
-    groups = observation_dict(observation).get("frame", {}).get("reference_groups", [])
-    return [group for group in groups if len(group.get("reference_indices", ())) >= 2]
-
-
-def legal_actions(observation: Any, remaining_group_indices: Sequence[int], *,
-                  geometry_used: bool, allow_acquisition: bool = True,
-                  action_space: ActionSpace = DEFAULT_ACTION_SPACE) -> List[Dict[str, Any]]:
-    """Return every policy-visible legal action in a stable order.
-
-    Strong geometry is available for every reference group.  That removes the
-    prior mismatch where a feedback rule could reuse a candidate group while
-    the learned policy and Oracle only had group zero.
-    """
+def unified_live_legal_actions(observation: Any, capabilities: LiveCapabilities,
+                               remaining_group_indices: Sequence[int] = (), *,
+                               geometry_used: bool = False) -> list[dict[str, Any]]:
+    """Return v1 choices from policy-visible state; never use query GT."""
     obs = observation_dict(observation)
-    groups = reference_groups(obs)
-    actions: List[Dict[str, Any]] = []
-    if allow_acquisition:
+    if obs.get("done"):
+        return []
+    state = obs.get("state", {})
+    groups = obs.get("frame", {}).get("reference_groups", [])
+    actions: list[dict[str, Any]] = []
+    count = int(state.get("frame_action_count", 0))
+    room = count < int(state.get("max_actions_per_frame", 1000000)) - 1
+    budget = state.get("remaining_budget_s")
+    if room and (budget is None or float(budget) > 0.):
         for index in remaining_group_indices:
             if 0 <= int(index) < len(groups):
-                actions.append({"kind": "localize", "references": list(groups[int(index)]["reference_indices"]),
-                                "reference_group": int(index), "is_terminal_action": False})
-        if not geometry_used:
+                refs = list(groups[int(index)]["reference_indices"])
+                if refs:
+                    actions.append({"kind": "localize_with_references",
+                                    "reference_indices": refs, "reference_group": int(index)})
+        if capabilities.strong_geometry and not geometry_used:
             for index, group in enumerate(groups):
-                actions.append({"kind": "geometry", "references": list(group["reference_indices"]),
-                                "reference_group": int(index), "is_terminal_action": False})
-        if action_space.allow_memory_query and obs.get("memory"):
-            actions.append({"kind": "memory", "references": [], "is_terminal_action": False})
-    candidate = obs.get("candidate") or {}
-    verified = bool(candidate.get("pose_available")) and bool(candidate.get("verified"))
-    if verified:
-        actions.append({"kind": "accept", "references": [], "is_terminal_action": True})
-    first_decision = int(obs.get("state", {}).get("frame_action_count", 0)) == 0
-    if not first_decision or not actions:
-        actions.append({"kind": "defer", "references": [], "is_terminal_action": True})
+                refs = list(group["reference_indices"])
+                if len(refs) >= 2:
+                    actions.append({"kind": "run_strong_geometry",
+                                    "reference_indices": refs, "reference_group": index})
+        candidate = obs.get("candidate") or {}
+        if candidate.get("pose_available") and not candidate.get("verification"):
+            actions.append({"kind": "verify_candidate"})
+    active = obs.get("candidate") or {}
+    for candidate in obs.get("candidates", []):
+        if (candidate.get("pose_available") and candidate.get("verified") and
+                candidate.get("candidate_index") != active.get("candidate_index")):
+            actions.append({"kind": "select_candidate",
+                            "candidate_index": int(candidate["candidate_index"])})
+    if active.get("pose_available") and active.get("verified"):
+        actions.append({"kind": "accept_candidate"})
+    if count > 0 or not actions:
+        actions.append({"kind": "defer_frame"})
     return actions
-
-
-def action_key(action: Mapping[str, Any]) -> tuple[str, tuple[int, ...]]:
-    return str(action.get("kind", "")), tuple(int(x) for x in action.get("references", ()))
-
-
-def is_deployment_legal(observation: Any, action: Mapping[str, Any]) -> bool:
-    """Apply the v2 first-decision safety mask to stored labels."""
-    kind = str(action.get("kind", ""))
-    if kind == "memory":
-        return False
-    if kind != "defer":
-        return True
-    return int(observation_dict(observation).get("state", {}).get("frame_action_count", 0)) > 0

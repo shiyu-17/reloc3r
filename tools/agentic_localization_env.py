@@ -29,10 +29,12 @@ FORBIDDEN_EVALUATOR_FIELDS = {
     "oracle", "outcome", "future_frame", "future_frame_read",
 }
 ACTION_KINDS = {
+    "retrieve_references",
     "localize_with_references",
     "run_strong_geometry",
     "retrieve_memory",
     "verify_candidate",
+    "select_candidate",
     "accept_candidate",
     "reject_candidate",
     "defer_frame",
@@ -103,6 +105,8 @@ class LocalizationAction:
     kind: str
     reference_indices: Tuple[int, ...] = ()
     memory_ids: Tuple[int, ...] = ()
+    top_k: int = 0
+    candidate_index: int = -1
 
     def __post_init__(self) -> None:
         if self.kind not in ACTION_KINDS:
@@ -115,6 +119,22 @@ class LocalizationAction:
             raise InvalidAction("memory_ids must be unique non-negative integers")
         object.__setattr__(self, "reference_indices", refs)
         object.__setattr__(self, "memory_ids", memories)
+        if self.kind == "retrieve_references" and self.top_k < 1:
+            raise InvalidAction("retrieve_references requires top_k >= 1")
+        if self.kind != "retrieve_references" and self.top_k:
+            raise InvalidAction("top_k is only valid for retrieve_references")
+        if self.kind == "select_candidate" and self.candidate_index < 0:
+            raise InvalidAction("select_candidate requires a non-negative candidate_index")
+        if self.kind != "select_candidate" and self.candidate_index != -1:
+            raise InvalidAction("candidate_index is only valid for select_candidate")
+
+    @classmethod
+    def retrieve_references(cls, top_k: int = 30) -> "LocalizationAction":
+        return cls("retrieve_references", top_k=int(top_k))
+
+    @classmethod
+    def select_candidate(cls, candidate_index: int) -> "LocalizationAction":
+        return cls("select_candidate", candidate_index=int(candidate_index))
 
     @classmethod
     def localize(cls, *reference_indices: int) -> "LocalizationAction":
@@ -177,6 +197,9 @@ class LocalizationState:
     accepted_pose: Optional[np.ndarray] = None
     accepted_frame_index: Optional[int] = None
     current_candidate: Optional[Candidate] = None
+    candidates: List[Candidate] = field(default_factory=list)
+    retrieved_reference_groups: List[Dict[str, Any]] = field(default_factory=list)
+    retrieved_reference_ids: List[int] = field(default_factory=list)
     memory: List[MemoryRecord] = field(default_factory=list)
     action_count: int = 0
     frame_action_count: int = 0
@@ -197,6 +220,7 @@ class Observation:
     memory: List[Dict[str, Any]]
     last_event: Optional[Dict[str, Any]]
     done: bool
+    candidates: List[Dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, Any]:
         return _copy_jsonable({
@@ -206,6 +230,7 @@ class Observation:
             "frame": self.frame,
             "state": self.state,
             "candidate": self.candidate,
+            "candidates": self.candidates,
             "memory": self.memory,
             "last_event": self.last_event,
             "done": self.done,
@@ -221,6 +246,11 @@ class LocalizationBackend(Protocol):
 
     def frame_observation(self, sequence: str, frame_index: int,
                           state: Mapping[str, Any]) -> Mapping[str, Any]:
+        ...
+
+    def retrieve_references(self, sequence: str, frame_index: int, top_k: int,
+                            state: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Run image-to-map retrieval now and return visible reference options."""
         ...
 
     def localize(self, sequence: str, frame_index: int,
@@ -264,11 +294,13 @@ class CallableLocalizationBackend:
                  localize_fn: Callable[[str, int, Sequence[int], Mapping[str, Any]], Mapping[str, Any]],
                  verify_fn: Callable[[str, int, Candidate, Mapping[str, Any]], Mapping[str, Any]],
                  retrieve_memory_fn: Optional[Callable[[str, int, Sequence[Mapping[str, Any]], Mapping[str, Any]], Mapping[str, Any]]] = None,
-                 strong_geometry_fn: Optional[Callable[[str, int, Sequence[int], Mapping[str, Any]], Mapping[str, Any]]] = None):
+                 strong_geometry_fn: Optional[Callable[[str, int, Sequence[int], Mapping[str, Any]], Mapping[str, Any]]] = None,
+                 retrieve_references_fn: Optional[Callable[[str, int, int, Mapping[str, Any]], Mapping[str, Any]]] = None):
         self._frame_counts = dict(frame_counts)
         self._frame_fn = frame_fn
         self._localize_fn = localize_fn
         self._verify_fn = verify_fn
+        self._retrieve_references_fn = retrieve_references_fn
         self._retrieve_memory_fn = retrieve_memory_fn
         self._strong_geometry_fn = strong_geometry_fn
 
@@ -278,6 +310,12 @@ class CallableLocalizationBackend:
     def frame_observation(self, sequence: str, frame_index: int,
                           state: Mapping[str, Any]) -> Mapping[str, Any]:
         return self._frame_fn(sequence, frame_index, state)
+
+    def retrieve_references(self, sequence: str, frame_index: int, top_k: int,
+                            state: Mapping[str, Any]) -> Mapping[str, Any]:
+        if self._retrieve_references_fn is None:
+            raise RuntimeError("backend does not provide online reference retrieval")
+        return self._retrieve_references_fn(sequence, frame_index, top_k, state)
 
     def localize(self, sequence: str, frame_index: int,
                  reference_indices: Sequence[int],
@@ -314,12 +352,14 @@ class AgenticLocalizationEnv:
     def __init__(self, backend: LocalizationBackend, *, max_actions_per_frame: int = 8,
                  require_online_execution: bool = True,
                  budget_s: Optional[float] = None,
-                 allow_memory_query: bool = True):
+                 allow_memory_query: bool = True,
+                 enforce_tool_budget: bool = False):
         self.backend = backend
         self.max_actions_per_frame = int(max_actions_per_frame)
         self.require_online_execution = bool(require_online_execution)
         self.budget_s = None if budget_s is None else float(budget_s)
         self.allow_memory_query = bool(allow_memory_query)
+        self.enforce_tool_budget = bool(enforce_tool_budget)
         self.state: Optional[LocalizationState] = None
         self._last_event: Optional[Dict[str, Any]] = None
         self.trace: List[Dict[str, Any]] = []
@@ -328,6 +368,9 @@ class AgenticLocalizationEnv:
         frame_count = int(self.backend.num_frames(sequence))
         if not 0 <= int(start_frame) < frame_count:
             raise ValueError("start_frame is outside the sequence")
+        reset_backend = getattr(self.backend, "reset_episode", None)
+        if callable(reset_backend):
+            reset_backend()
         self.state = LocalizationState(sequence=sequence, frame_index=int(start_frame),
                                        frame_count=frame_count)
         self._last_event = {"type": "reset", "causal": dict((key, False) for key in CAUSAL_FLAGS)}
@@ -346,10 +389,13 @@ class AgenticLocalizationEnv:
         """
         if self.state is None:
             raise RuntimeError("call reset before fork")
+        fork_backend = getattr(self.backend, "fork_branch", None)
+        branch_backend = fork_backend() if callable(fork_backend) else self.backend
         clone = AgenticLocalizationEnv(
-            self.backend, max_actions_per_frame=self.max_actions_per_frame,
+            branch_backend, max_actions_per_frame=self.max_actions_per_frame,
             require_online_execution=self.require_online_execution,
-            budget_s=self.budget_s, allow_memory_query=self.allow_memory_query)
+            budget_s=self.budget_s, allow_memory_query=self.allow_memory_query,
+            enforce_tool_budget=self.enforce_tool_budget)
         clone.state = copy.deepcopy(self.state)
         clone._last_event = copy.deepcopy(self._last_event)
         clone.trace = copy.deepcopy(self.trace)
@@ -362,6 +408,11 @@ class AgenticLocalizationEnv:
             raise RuntimeError("step called after environment termination")
         if self.state.frame_action_count >= self.max_actions_per_frame:
             raise InvalidAction("per-frame action budget exhausted; defer or accept earlier")
+        if (self.enforce_tool_budget and self.budget_s is not None and
+                self.state.frame_tool_cost_s >= self.budget_s
+                and action.kind in ("retrieve_references", "localize_with_references",
+                                    "run_strong_geometry", "retrieve_memory", "verify_candidate")):
+            raise InvalidAction("per-frame tool budget exhausted; finish the current frame")
         old_action_count = self.state.action_count
         old_frame_action_count = self.state.frame_action_count
         old_frame_tool_cost_s = self.state.frame_tool_cost_s
@@ -369,7 +420,10 @@ class AgenticLocalizationEnv:
         self.state.action_count += 1
         self.state.frame_action_count += 1
         try:
-            if action.kind == "localize_with_references":
+            if action.kind == "retrieve_references":
+                event = self._retrieve_references(action)
+                reward = -0.1
+            elif action.kind == "localize_with_references":
                 event = self._localize(action)
                 reward = -1.0
             elif action.kind == "run_strong_geometry":
@@ -381,6 +435,9 @@ class AgenticLocalizationEnv:
             elif action.kind == "verify_candidate":
                 event = self._verify()
                 reward = 0.2 if event["accepted"] else -0.2
+            elif action.kind == "select_candidate":
+                event = self._select_candidate(action)
+                reward = 0.0
             elif action.kind == "accept_candidate":
                 event = self._accept()
                 reward = 1.0 if event["accepted"] else -0.5
@@ -412,7 +469,9 @@ class AgenticLocalizationEnv:
             "frame_index_before": state_before["frame_index"],
             "action": {"kind": action.kind,
                        "reference_indices": list(action.reference_indices),
-                       "memory_ids": list(action.memory_ids)},
+                       "memory_ids": list(action.memory_ids),
+                       "top_k": int(action.top_k),
+                       "candidate_index": int(action.candidate_index)},
             "state_before": state_before,
             "event": _copy_jsonable(event),
             "state_after": self._state_snapshot(),
@@ -432,6 +491,7 @@ class AgenticLocalizationEnv:
             "memory_frame_indices": [item.frame_index for item in self.state.memory],
             "memory_size": len(self.state.memory),
             "candidate_source": None if candidate is None else candidate.source,
+            "candidate_count": len(self.state.candidates),
             "candidate_verified": False if candidate is None else candidate.verified,
             "action_count": self.state.action_count,
             "frame_action_count": self.state.frame_action_count,
@@ -456,7 +516,7 @@ class AgenticLocalizationEnv:
             event = record["event"]
             before = record["state_before"]
             after = record["state_after"]
-            if action in ("localize_with_references", "run_strong_geometry"):
+            if action in ("retrieve_references", "localize_with_references", "run_strong_geometry"):
                 execution = event.get("execution", {})
                 if execution.get("executed") is not True or execution.get("cache_hit") is True:
                     violations.append(f"step[{index}] acquisition lacks live execution receipt")
@@ -542,18 +602,64 @@ class AgenticLocalizationEnv:
             candidate.evidence["available"] = False
         return candidate
 
+    def _retrieve_references(self, action: LocalizationAction) -> Dict[str, Any]:
+        assert self.state is not None
+        result = self.backend.retrieve_references(
+            self.state.sequence, self.state.frame_index, action.top_k, self._backend_state())
+        if not isinstance(result, Mapping):
+            raise CausalViolation("reference retrieval did not return a mapping")
+        _assert_no_evaluator_fields(result)
+        _causal_audit(result)
+        execution = dict(result.get("execution", {}))
+        if self.require_online_execution:
+            if execution.get("executed") is not True or execution.get("cache_hit") is True:
+                raise CausalViolation("reference retrieval lacks a live execution receipt")
+            if int(execution.get("query_frame_index", -1)) != self.state.frame_index:
+                raise CausalViolation("retrieval receipt does not identify the current query frame")
+            if not execution.get("stages"):
+                raise CausalViolation("retrieval receipt does not expose inference stages")
+        references = result.get("references", ())
+        if not isinstance(references, (list, tuple)):
+            raise CausalViolation("retrieval references must be a list")
+        seen = set()
+        for item in references:
+            if not isinstance(item, Mapping) or "reference_index" not in item:
+                raise CausalViolation("retrieval option is missing reference_index")
+            ref = int(item["reference_index"])
+            if ref < 0 or ref in seen:
+                raise CausalViolation("retrieval returned invalid or duplicate reference indices")
+            seen.add(ref)
+        for group in result.get("groups", ()):
+            if not isinstance(group, Mapping):
+                raise CausalViolation("retrieval group must be a mapping")
+            group_refs = [int(x) for x in group.get("reference_indices", ())]
+            if any(x not in seen for x in group_refs):
+                raise CausalViolation("retrieval group contains an unreturned reference")
+        self.state.retrieved_reference_ids = sorted(seen)
+        self.state.retrieved_reference_groups = _copy_jsonable(result.get("groups", ()))
+        return {"type": "retrieve_references", "references": _copy_jsonable(references),
+                "groups": _copy_jsonable(result.get("groups", ())),
+                "execution": _copy_jsonable(execution),
+                "causal": dict((key, False) for key in CAUSAL_FLAGS)}
+
     def _localize(self, action: LocalizationAction) -> Dict[str, Any]:
         assert self.state is not None
         if not action.reference_indices:
             raise InvalidAction("localize_with_references requires at least one reference")
+        if (self.state.retrieved_reference_ids and
+                any(ref not in self.state.retrieved_reference_ids for ref in action.reference_indices)):
+            raise InvalidAction("localization reference was not returned by retrieval")
         result = self.backend.localize(self.state.sequence, self.state.frame_index,
                                        action.reference_indices, self._backend_state())
         candidate = self._candidate_from_result(result, source="localization",
                                                  references=action.reference_indices,
                                                  require_execution=True)
         self.state.current_candidate = candidate
+        self.state.candidates.append(candidate)
         return {"type": "localize", "source": candidate.source,
                 "references": list(action.reference_indices),
+                "pose": None if candidate.pose is None else candidate.pose.tolist(),
+                "evidence": _copy_jsonable(candidate.evidence),
                 "pose_available": candidate.pose is not None,
                 "execution": candidate.execution,
                 "causal": dict((key, False) for key in CAUSAL_FLAGS)}
@@ -562,6 +668,9 @@ class AgenticLocalizationEnv:
         assert self.state is not None
         if len(action.reference_indices) < 2:
             raise InvalidAction("run_strong_geometry requires at least two references")
+        if (self.state.retrieved_reference_ids and
+                any(ref not in self.state.retrieved_reference_ids for ref in action.reference_indices)):
+            raise InvalidAction("geometry reference was not returned by retrieval")
         result = self.backend.strong_geometry(
             self.state.sequence, self.state.frame_index,
             action.reference_indices, self._backend_state())
@@ -569,8 +678,11 @@ class AgenticLocalizationEnv:
             result, source="strong_geometry", references=action.reference_indices,
             require_execution=True)
         self.state.current_candidate = candidate
+        self.state.candidates.append(candidate)
         return {"type": "strong_geometry", "source": candidate.source,
                 "references": list(action.reference_indices),
+                "pose": None if candidate.pose is None else candidate.pose.tolist(),
+                "evidence": _copy_jsonable(candidate.evidence),
                 "pose_available": candidate.pose is not None,
                 "execution": candidate.execution,
                 "causal": dict((key, False) for key in CAUSAL_FLAGS)}
@@ -596,6 +708,7 @@ class AgenticLocalizationEnv:
                                               memory, self._backend_state())
         candidate = self._candidate_from_result(result, source="memory", references=())
         self.state.current_candidate = candidate
+        self.state.candidates.append(candidate)
         return {"type": "retrieve_memory", "memory_ids": [x["memory_id"] for x in memory],
                 "source": candidate.source, "pose_available": candidate.pose is not None,
                 "execution": candidate.execution,
@@ -616,7 +729,22 @@ class AgenticLocalizationEnv:
         candidate.verification = dict(result.get("evidence", result.get("verification", {})))
         candidate.verification["causal"] = audit
         return {"type": "verify", "accepted": candidate.verified,
-                "source": candidate.source, "evidence": candidate.verification,
+                "source": candidate.source,
+                "pose": candidate.pose.tolist(),
+                "reference_indices": list(candidate.reference_indices),
+                "evidence": candidate.verification,
+                "causal": dict((key, False) for key in CAUSAL_FLAGS)}
+
+    def _select_candidate(self, action: LocalizationAction) -> Dict[str, Any]:
+        assert self.state is not None
+        if action.candidate_index >= len(self.state.candidates):
+            raise InvalidAction("candidate_index is not available in the current frame")
+        candidate = self.state.candidates[action.candidate_index]
+        if candidate.pose is None:
+            raise InvalidAction("cannot select a candidate without a pose")
+        self.state.current_candidate = candidate
+        return {"type": "select_candidate", "candidate_index": action.candidate_index,
+                "source": candidate.source, "pose_available": True,
                 "causal": dict((key, False) for key in CAUSAL_FLAGS)}
 
     def _accept(self) -> Dict[str, Any]:
@@ -628,12 +756,14 @@ class AgenticLocalizationEnv:
         self.state.accepted_frame_index = self.state.frame_index
         self.state.reject_streak = 0
         memory_id = len(self.state.memory)
-        confidence = float(candidate.verification.get("confidence", 1.0))
+        confidence_value = candidate.verification.get("confidence")
+        confidence = float(confidence_value) if confidence_value is not None else 0.0
         self.state.memory.append(MemoryRecord(
             memory_id=memory_id, frame_index=self.state.frame_index,
             pose=candidate.pose.copy(), source=candidate.source,
             confidence=max(0.0, min(1.0, confidence)),
             metadata={"references": list(candidate.reference_indices),
+                      "confidence_calibrated": bool(candidate.verification.get("confidence_calibrated", False)),
                       "verification": _copy_jsonable(candidate.verification)},
         ))
         event = {"type": "accept", "accepted": True, "memory_id": memory_id,
@@ -656,6 +786,9 @@ class AgenticLocalizationEnv:
         self.state.frame_action_count = 0
         self.state.frame_tool_cost_s = 0.0
         self.state.current_candidate = None
+        self.state.candidates = []
+        self.state.retrieved_reference_ids = []
+        self.state.retrieved_reference_groups = []
         if self.state.frame_index >= self.state.frame_count:
             self.state.done = True
 
@@ -668,15 +801,29 @@ class AgenticLocalizationEnv:
         candidate_view = None
         if candidate is not None:
             candidate_view = {
+                "candidate_index": next((i for i, item in enumerate(self.state.candidates)
+                                          if item is candidate), -1),
                 "source": candidate.source,
                 "frame_index": candidate.frame_index,
                 "reference_indices": list(candidate.reference_indices),
+                "pose": None if candidate.pose is None else candidate.pose.tolist(),
                 "pose_available": candidate.pose is not None,
                 "verified": candidate.verified,
                 "evidence": _copy_jsonable(candidate.evidence),
                 "verification": _copy_jsonable(candidate.verification),
                 "execution": _copy_jsonable(candidate.execution),
             }
+        candidate_views = [{
+            "candidate_index": index,
+            "source": item.source,
+            "frame_index": item.frame_index,
+            "reference_indices": list(item.reference_indices),
+            "pose": None if item.pose is None else item.pose.tolist(),
+            "pose_available": item.pose is not None,
+            "verified": item.verified,
+            "evidence": _copy_jsonable(item.evidence),
+            "verification": _copy_jsonable(item.verification),
+        } for index, item in enumerate(self.state.candidates)]
         memory_view = [{
             "memory_id": x.memory_id, "frame_index": x.frame_index,
             "source": x.source, "confidence": x.confidence,
@@ -692,16 +839,20 @@ class AgenticLocalizationEnv:
             "memory_size": len(self.state.memory),
             "action_count": self.state.action_count,
             "frame_action_count": self.state.frame_action_count,
+            "max_actions_per_frame": self.max_actions_per_frame,
             "frame_tool_cost_s": float(self.state.frame_tool_cost_s),
+            "retrieved_reference_groups": _copy_jsonable(self.state.retrieved_reference_groups),
+            "retrieved_reference_ids": list(self.state.retrieved_reference_ids),
         }
         if self.budget_s is not None:
             state_view["budget_s"] = self.budget_s
             state_view["remaining_budget_s"] = max(
                 0.0, self.budget_s - float(self.state.frame_tool_cost_s))
-        return Observation(self.state.sequence, self.state.frame_index,
-                           self.state.frame_count, _copy_jsonable(frame), state_view,
-                           candidate_view, memory_view,
-                           _copy_jsonable(self._last_event), self.state.done)
+        return Observation(sequence=self.state.sequence, frame_index=self.state.frame_index,
+                           frame_count=self.state.frame_count, frame=_copy_jsonable(frame),
+                           state=state_view, candidate=candidate_view, candidates=candidate_views,
+                           memory=memory_view, last_event=_copy_jsonable(self._last_event),
+                           done=self.state.done)
 
 
 __all__ = [

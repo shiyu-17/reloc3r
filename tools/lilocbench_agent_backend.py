@@ -26,6 +26,10 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from reloc3r.reloc3r_relpose import inference_relpose, setup_reloc3r_relpose_model  # noqa: E402
 from reloc3r.reloc3r_visloc import Reloc3rVisloc  # noqa: E402
 from tools.agentic_localization_env import Candidate  # noqa: E402
+from tools.active_evidence_protocol import LiveCapabilities  # noqa: E402
+from tools.lilocbench_geometry import (  # noqa: E402
+    camera_matrix, intersect_query, roma_pair, solve_pose, triangulate,
+)
 from tools.eval_lilocbench_reloc3r import (  # noqa: E402
     base_to_front_rgb_optical,
     candidate_dispersion,
@@ -56,8 +60,12 @@ def previous_state_risk(candidate_pose: np.ndarray,
 class LILocBenchReloc3rBackend:
     """Reference-conditioned Reloc3r backend with an evidence-only verifier."""
 
+    # Retrieval rankings were built before the episode; this is not an online
+    # retrieval action and must never be charged as one.
+    live_capabilities = LiveCapabilities(reference_retrieval="precomputed", strong_geometry=True)
+
     def __init__(self, data_root: Path, mapping_gt: Path, query_sequence: str,
-                 retrieval_npz: Path, *, device: str = "cuda",
+                 retrieval_npz: Path | None, *, device: str = "cuda",
                  model_name: str = "Reloc3rRelpose(img_size=512)",
                  min_references: int = 2, max_dispersion_m: float = 1.5,
                  max_dispersion_deg: float = 15.0,
@@ -119,11 +127,15 @@ class LILocBenchReloc3rBackend:
         self.mapping_pose, _ = tum_camera_poses(
             Path(mapping_gt), mapping_times,
             base_to_front_rgb_optical(mapping_root), 0.1)
-        retrieval = np.load(Path(retrieval_npz))
-        self.retrieval_indices = np.asarray(retrieval["mapping_indices"], dtype=np.int64)
-        self.retrieval_scores = np.asarray(retrieval["mapping_scores"], dtype=np.float32)
-        if len(self.retrieval_indices) != len(self.query_frames):
-            raise ValueError("retrieval rows do not match query frames")
+        if retrieval_npz is None:
+            self.retrieval_indices = None
+            self.retrieval_scores = None
+        else:
+            retrieval = np.load(Path(retrieval_npz))
+            self.retrieval_indices = np.asarray(retrieval["mapping_indices"], dtype=np.int64)
+            self.retrieval_scores = np.asarray(retrieval["mapping_scores"], dtype=np.float32)
+            if len(self.retrieval_indices) != len(self.query_frames):
+                raise ValueError("retrieval rows do not match query frames")
         self.model = setup_reloc3r_relpose_model(model_name, self.device)
         # Deliberately lazy: a normal Reloc3r-only run does not allocate the
         # stronger RoMa model.  When selected, it is run on the current query
@@ -151,6 +163,8 @@ class LILocBenchReloc3rBackend:
     def frame_observation(self, sequence: str, frame_index: int,
                           state: Mapping[str, Any]) -> Mapping[str, Any]:
         del state
+        if self.retrieval_indices is None or self.retrieval_scores is None:
+            raise RuntimeError("this backend requires precomputed reference rankings")
         refs = self.retrieval_indices[frame_index]
         scores = self.retrieval_scores[frame_index]
         groups = []
@@ -321,9 +335,6 @@ class LILocBenchReloc3rBackend:
         refs = tuple(int(x) for x in reference_indices)
         if len(refs) < 2 or any(x < 0 or x >= len(self.mapping_frames) for x in refs):
             raise ValueError("RoMa geometry requires at least two valid map references")
-        from tools.run_avl004_roma_recovery import (
-            camera_matrix, intersect_query, roma_pair, solve_pose, triangulate,
-        )
         model = self._roma()
         query_path = self.query_frames[frame_index]["path"]
         pair_matches = [roma_pair(model, query_path,
@@ -420,7 +431,6 @@ class LILocBenchReloc3rBackend:
         if heldout is None:
             return {"available": False, "reason": "no_heldout_reference",
                     "elapsed_s": time.perf_counter() - started}
-        from tools.run_avl004_roma_recovery import roma_pair
         qxy, rxy, score = roma_pair(self._roma(), self.query_frames[frame_index]["path"],
                                     self.mapping_frames[heldout]["path"], self.device, 6000)
         if not len(qxy):
